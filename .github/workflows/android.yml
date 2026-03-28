@@ -39,15 +39,38 @@ jobs:
   upload-apk-to-server:
     runs-on: ubuntu-latest
     needs: build
-    if: ${{ secrets.SERVER_HOST != '' && secrets.SERVER_USER != '' && secrets.SERVER_SSH_KEY != '' && secrets.SERVER_UPLOAD_PATH != '' }}
+    env:
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      SERVER_PORT: ${{ secrets.SERVER_PORT }}
+      SERVER_USER: ${{ secrets.SERVER_USER }}
+      SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+      SERVER_UPLOAD_PATH: ${{ secrets.SERVER_UPLOAD_PATH }}
     steps:
+      - name: Check upload configuration
+        id: upload_config
+        run: |
+          set -euo pipefail
+          if [ -n "${SERVER_HOST}" ] && [ -n "${SERVER_USER}" ] && [ -n "${SERVER_SSH_KEY}" ] && [ -n "${SERVER_UPLOAD_PATH}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "server_port=${SERVER_PORT:-22}" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "server_port=22" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip upload when server secrets are missing
+        if: ${{ steps.upload_config.outputs.enabled != 'true' }}
+        run: echo "Server upload secrets are not configured. APK remains available as a GitHub artifact only."
+
       - name: Download built APK
+        if: ${{ steps.upload_config.outputs.enabled == 'true' }}
         uses: actions/download-artifact@v4
         with:
           name: codex-android-debug
           path: dist
 
       - name: Prepare upload files
+        if: ${{ steps.upload_config.outputs.enabled == 'true' }}
         run: |
           set -euo pipefail
           mkdir -p upload
@@ -60,21 +83,23 @@ jobs:
           cp "$APK_PATH" "upload/codex-android-debug-latest.apk"
 
       - name: Ensure remote upload directory exists
+        if: ${{ steps.upload_config.outputs.enabled == 'true' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          port: ${{ secrets.SERVER_PORT != '' && secrets.SERVER_PORT || '22' }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: mkdir -p "${{ secrets.SERVER_UPLOAD_PATH }}"
+          host: ${{ env.SERVER_HOST }}
+          port: ${{ steps.upload_config.outputs.server_port }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SERVER_SSH_KEY }}
+          script: mkdir -p "${{ env.SERVER_UPLOAD_PATH }}"
 
       - name: Upload APK to server
+        if: ${{ steps.upload_config.outputs.enabled == 'true' }}
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          port: ${{ secrets.SERVER_PORT != '' && secrets.SERVER_PORT || '22' }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
+          host: ${{ env.SERVER_HOST }}
+          port: ${{ steps.upload_config.outputs.server_port }}
+          username: ${{ env.SERVER_USER }}
+          key: ${{ env.SERVER_SSH_KEY }}
           source: "upload/*.apk"
-          target: ${{ secrets.SERVER_UPLOAD_PATH }}
+          target: ${{ env.SERVER_UPLOAD_PATH }}
           overwrite: true
