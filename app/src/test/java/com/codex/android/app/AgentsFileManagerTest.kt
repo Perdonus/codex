@@ -20,6 +20,7 @@ class AgentsFileManagerTest {
         assertTrue(merged.contains("Android Codex Client Instructions"))
         assertTrue(merged.contains("Pinned GitHub repository: https://github.com/Perdonus/codex"))
         assertTrue(merged.contains("Preferred working tree on server: /srv/codex"))
+        assertTrue(merged.contains("If the remote Codex session needs OpenAI or ChatGPT authentication"))
     }
 
     @Test

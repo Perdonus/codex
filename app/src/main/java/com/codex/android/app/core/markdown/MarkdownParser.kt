@@ -181,7 +181,7 @@ class MarkdownParser {
     }
 
     private fun annotationTagForDestination(destination: String): String {
-        return if (pathRegex.matches(destination) || destination.startsWith("~/")) "download" else "url"
+        return if (destination == "~" || pathRegex.matches(destination) || destination.startsWith("~/")) "download" else "url"
     }
 }
 
