@@ -2,6 +2,8 @@ package com.codex.android.app.data.remote.ssh
 
 import android.content.Context
 import com.codex.android.app.core.model.CodexProfile
+import com.hierynomus.sshj.key.KeyAlgorithm
+import com.hierynomus.sshj.key.KeyAlgorithms
 import java.io.File
 import java.io.IOException
 import java.net.InetAddress
@@ -10,8 +12,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
+import net.schmizz.sshj.common.Factory
 import net.schmizz.sshj.connection.channel.direct.Parameters
 import net.schmizz.sshj.sftp.SFTPClient
+import net.schmizz.sshj.transport.kex.Curve25519SHA256
+import com.hierynomus.sshj.transport.kex.ExtInfoClientFactory
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier
 
 class RemoteSshGateway(
@@ -416,5 +421,26 @@ internal class AndroidSshClient : SSHClient(androidCompatibleConfig()) {
 }
 
 private fun androidCompatibleConfig(): DefaultConfig {
-    return DefaultConfig()
+    return object : DefaultConfig() {
+        override fun initKeyExchangeFactories() {
+            // Android devices often route generic EC generation into AndroidKeyStore.
+            // Restricting sshj to curve25519 avoids that path and still matches this server.
+            setKeyExchangeFactories(
+                Curve25519SHA256.Factory(),
+                Curve25519SHA256.FactoryLibSsh(),
+                ExtInfoClientFactory(),
+            )
+        }
+
+        override fun initKeyAlgorithms() {
+            // Prefer RSA host keys to avoid EC/Ed25519 provider edge cases on Android.
+            setKeyAlgorithms(
+                listOf<Factory.Named<KeyAlgorithm>>(
+                    KeyAlgorithms.RSASHA512(),
+                    KeyAlgorithms.RSASHA256(),
+                    KeyAlgorithms.SSHRSA(),
+                ),
+            )
+        }
+    }
 }

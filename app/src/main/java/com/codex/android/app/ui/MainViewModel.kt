@@ -29,6 +29,7 @@ import com.codex.android.app.core.model.RemoteGitRepository
 import com.codex.android.app.core.model.SidebarState
 import com.codex.android.app.core.model.ThreadRuntimeStatus
 import com.codex.android.app.core.util.AgentsFileManager
+import com.codex.android.app.core.util.SecurityProviderCompat
 import com.codex.android.app.data.remote.codex.CodexAppServerClient
 import com.codex.android.app.data.remote.codex.CodexAccountStatus
 import com.codex.android.app.data.remote.codex.CodexEvent
@@ -117,6 +118,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             appendDiagnostic("Старт входа по SSH для $username")
+            appendDiagnostic("SSH provider: ${SecurityProviderCompat.currentSshProviderName()}")
             _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Устанавливаю SSH-ключ...")) }
             runCatching {
                 val account = localStateRepository.upsertAccount(
@@ -130,6 +132,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     accountId = account.id,
                     comment = "codex-android@$username",
                 )
+                appendDiagnostic("SSH-ключ для аккаунта сгенерирован")
                 val bootstrap = remoteSshGateway.bootstrapPasswordAuth(
                     host = BuildConfig.DEFAULT_SERVER_HOST,
                     port = BuildConfig.DEFAULT_SERVER_PORT,
@@ -1054,6 +1057,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appendLine("device=${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("android_api=${Build.VERSION.SDK_INT}")
             appendLine("server=${BuildConfig.DEFAULT_SERVER_HOST}:${BuildConfig.DEFAULT_SERVER_PORT}")
+            appendLine("ssh_provider=${SecurityProviderCompat.currentSshProviderName()}")
             appendLine("selected_account=${state.selectedAccount?.displayName ?: "none"}")
             appendLine("connection_status=${state.connectionState.status}")
             appendLine("connection_message=${state.connectionState.message ?: ""}")
