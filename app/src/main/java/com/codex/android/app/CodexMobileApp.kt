@@ -9,7 +9,7 @@ class CodexMobileApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        SecurityProviderCompat.installFullBouncyCastle()
+        SecurityProviderCompat.configureAndroidSshProviders()
         container = AppContainer(this)
     }
 }

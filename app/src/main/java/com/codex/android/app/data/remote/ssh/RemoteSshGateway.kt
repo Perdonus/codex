@@ -415,19 +415,5 @@ internal class AndroidSshClient : SSHClient(androidCompatibleConfig()) {
 }
 
 private fun androidCompatibleConfig(): DefaultConfig {
-    return DefaultConfig().apply {
-        setKeyExchangeFactories(
-            keyExchangeFactories.filterNot { factory ->
-                factory.name.contains("curve25519", ignoreCase = true) ||
-                    factory.name.contains("x25519", ignoreCase = true) ||
-                    factory.name.contains("ecdh", ignoreCase = true)
-            },
-        )
-        setKeyAlgorithms(
-            keyAlgorithms.filterNot { algorithm ->
-                algorithm.name.contains("ecdsa", ignoreCase = true) ||
-                    algorithm.name.contains("ec", ignoreCase = true)
-            },
-        )
-    }
+    return DefaultConfig()
 }

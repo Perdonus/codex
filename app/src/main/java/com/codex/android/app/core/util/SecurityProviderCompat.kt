@@ -1,14 +1,12 @@
 package com.codex.android.app.core.util
 
-import java.security.Security
-import org.bouncycastle.jce.provider.BouncyCastleProvider
+import net.schmizz.sshj.common.SecurityUtils
 
 object SecurityProviderCompat {
-    fun installFullBouncyCastle() {
-        val currentProvider = Security.getProvider(BouncyCastleProvider.PROVIDER_NAME)
-        if (currentProvider?.javaClass == BouncyCastleProvider::class.java) return
-
-        Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME)
-        Security.insertProviderAt(BouncyCastleProvider(), 1)
+    fun configureAndroidSshProviders() {
+        // On Android, sshj's BC-forced path breaks modern KEX such as X25519/ECDH.
+        // Keep sshj on the platform providers so it can negotiate with modern OpenSSH servers.
+        SecurityUtils.setSecurityProvider(null)
+        SecurityUtils.setRegisterBouncyCastle(false)
     }
 }
