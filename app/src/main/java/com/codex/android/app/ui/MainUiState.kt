@@ -5,6 +5,7 @@ import com.codex.android.app.core.model.CachedThread
 import com.codex.android.app.core.model.ChatMessage
 import com.codex.android.app.core.model.ComposerState
 import com.codex.android.app.core.model.ConnectionState
+import com.codex.android.app.core.model.CodexProfile
 import com.codex.android.app.core.model.GitHubRepo
 import com.codex.android.app.core.model.GitHubSession
 import com.codex.android.app.core.model.ModelOption
@@ -17,7 +18,7 @@ data class MainUiState(
     val isLoaded: Boolean = false,
     val accounts: List<ServerAccount> = emptyList(),
     val selectedAccountId: String? = null,
-    val accountDraft: AccountDraft = AccountDraft(host = "91.233.168.233"),
+    val accountDraft: AccountDraft = AccountDraft(),
     val connectionState: ConnectionState = ConnectionState(),
     val threads: List<CachedThread> = emptyList(),
     val selectedThreadId: String? = null,
@@ -27,6 +28,7 @@ data class MainUiState(
     val sidebar: SidebarState = SidebarState(),
     val settings: SettingsState = SettingsState(),
     val openAiAccount: OpenAiAccountState = OpenAiAccountState(),
+    val codexProfiles: List<CodexProfile> = emptyList(),
     val gitHubSession: GitHubSession? = null,
     val deviceFlow: DeviceFlowState? = null,
     val pendingExternalUrl: String? = null,
@@ -47,3 +49,6 @@ val MainUiState.selectedThread: CachedThread?
 
 val MainUiState.availableGitHubRepos: List<GitHubRepo>
     get() = settings.availableRepos
+
+val MainUiState.selectedCodexProfile: CodexProfile?
+    get() = codexProfiles.firstOrNull { it.isActive }

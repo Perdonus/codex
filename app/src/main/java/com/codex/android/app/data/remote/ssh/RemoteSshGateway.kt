@@ -1,6 +1,7 @@
 package com.codex.android.app.data.remote.ssh
 
 import android.content.Context
+import com.codex.android.app.core.model.CodexProfile
 import java.io.File
 import java.io.IOException
 import java.net.InetAddress
@@ -103,9 +104,10 @@ internal class ManagedRemoteSession(
     private val client: AndroidSshClient,
     private val sftpClient: SFTPClient,
 ) : AutoCloseable {
-    suspend fun ensureCodexAppServer(port: Int): Int = withContext(Dispatchers.IO) {
+    suspend fun ensureCodexAppServer(port: Int, forceRestart: Boolean = false): Int = withContext(Dispatchers.IO) {
         val command = """
             PORT=$port
+            FORCE_RESTART=${if (forceRestart) 1 else 0}
             port_listening() {
               if command -v ss >/dev/null 2>&1; then
                 ss -ltn 2>/dev/null | grep -q ":${'$'}PORT "
@@ -121,6 +123,15 @@ internal class ManagedRemoteSession(
               fi
               return 1
             }
+            if [ "${'$'}FORCE_RESTART" = "1" ]; then
+              if command -v lsof >/dev/null 2>&1; then
+                lsof -tiTCP:"${'$'}PORT" -sTCP:LISTEN 2>/dev/null | while read -r pid; do
+                  kill "${'$'}pid" 2>/dev/null || true
+                done
+              fi
+              pkill -f "codex app-server --listen ws://127.0.0.1:${'$'}PORT" 2>/dev/null || true
+              sleep 1
+            fi
             if ! command -v codex >/dev/null 2>&1; then
               echo "__CODEX_MISSING__"
               exit 127
@@ -263,6 +274,88 @@ internal class ManagedRemoteSession(
             .toList()
     }
 
+    suspend fun listCodexProfiles(
+        activeEmail: String? = null,
+        activePlanType: String? = null,
+    ): List<CodexProfile> = withContext(Dispatchers.IO) {
+        val output = executeShell(
+            """
+            mkdir -p "${'$'}HOME/.codex/profiles"
+            AUTH="${'$'}HOME/.codex/auth.json"
+            for profile in "${'$'}HOME"/.codex/profiles/*.json; do
+              [ -e "${'$'}profile" ] || continue
+              name="$(basename "${'$'}profile" .json)"
+              active=0
+              if [ -f "${'$'}AUTH" ] && cmp -s "${'$'}profile" "${'$'}AUTH"; then
+                active=1
+              fi
+              printf '%s\t%s\n' "${'$'}name" "${'$'}active"
+            done
+            """.trimIndent(),
+        )
+        output.lineSequence()
+            .filter { it.isNotBlank() && it.contains('\t') }
+            .map { line ->
+                val parts = line.split('\t', limit = 2)
+                val isActive = parts.getOrNull(1) == "1"
+                CodexProfile(
+                    name = parts[0],
+                    isActive = isActive,
+                    email = activeEmail.takeIf { isActive },
+                    planType = activePlanType.takeIf { isActive },
+                )
+            }
+            .sortedWith(compareByDescending<CodexProfile> { it.isActive }.thenBy { it.name.lowercase() })
+            .toList()
+    }
+
+    suspend fun saveCurrentCodexProfile(preferredName: String): String = withContext(Dispatchers.IO) {
+        val profileName = sanitizeProfileName(preferredName)
+        val output = executeShell(
+            """
+            mkdir -p "${'$'}HOME/.codex/profiles"
+            AUTH="${'$'}HOME/.codex/auth.json"
+            if [ ! -f "${'$'}AUTH" ]; then
+              printf '%s' "__NO_AUTH__"
+              exit 0
+            fi
+            base=${shellEscape(profileName)}
+            candidate="${'$'}base"
+            index=2
+            while [ -e "${'$'}HOME/.codex/profiles/${'$'}candidate.json" ] && ! cmp -s "${'$'}HOME/.codex/profiles/${'$'}candidate.json" "${'$'}AUTH"; do
+              candidate="${'$'}base-${'$'}index"
+              index=$((index + 1))
+            done
+            cp "${'$'}AUTH" "${'$'}HOME/.codex/profiles/${'$'}candidate.json"
+            printf '%s' "${'$'}candidate"
+            """.trimIndent(),
+        ).trim()
+        if (output == "__NO_AUTH__") {
+            throw IOException("codex auth.json is missing on the remote server")
+        }
+        output
+    }
+
+    suspend fun activateCodexProfile(profileName: String) = withContext(Dispatchers.IO) {
+        val safeName = profileName.trim()
+        val output = executeShell(
+            """
+            profile_name=${shellEscape("$safeName.json")}
+            PROFILE="${'$'}HOME/.codex/profiles/${'$'}profile_name"
+            AUTH="${'$'}HOME/.codex/auth.json"
+            if [ ! -f "${'$'}PROFILE" ]; then
+              printf '%s' "__PROFILE_MISSING__"
+              exit 0
+            fi
+            cp "${'$'}PROFILE" "${'$'}AUTH"
+            printf '%s' "__OK__"
+            """.trimIndent(),
+        ).trim()
+        if (output == "__PROFILE_MISSING__") {
+            throw IOException("Codex profile $safeName was not found on the remote server")
+        }
+    }
+
     fun appServerPortFor(username: String): Int {
         val hash = username.fold(0) { acc, char -> acc * 31 + char.code }
         return 47000 + kotlin.math.abs(hash % 1000)
@@ -282,6 +375,15 @@ internal class ManagedRemoteSession(
             url.startsWith("git@github.com:") -> "https://github.com/" + url.removePrefix("git@github.com:").removeSuffix(".git")
             else -> url.removeSuffix(".git")
         }
+    }
+
+    private fun sanitizeProfileName(raw: String): String {
+        return raw
+            .trim()
+            .lowercase()
+            .replace(Regex("[^a-z0-9@._-]+"), "-")
+            .trim('-')
+            .ifBlank { "profile" }
     }
 }
 
@@ -306,8 +408,19 @@ data class RemoteFileEntry(
     val modifiedEpochSeconds: Long?,
 )
 
-internal class AndroidSshClient : SSHClient(DefaultConfig()) {
+internal class AndroidSshClient : SSHClient(androidCompatibleConfig()) {
     fun setKeepAliveIntervalSeconds(seconds: Int) {
         conn.keepAlive.keepAliveInterval = seconds
+    }
+}
+
+private fun androidCompatibleConfig(): DefaultConfig {
+    return DefaultConfig().apply {
+        setKeyExchangeFactories(
+            keyExchangeFactories.filterNot { factory ->
+                factory.name.contains("curve25519", ignoreCase = true) ||
+                    factory.name.contains("x25519", ignoreCase = true)
+            },
+        )
     }
 }

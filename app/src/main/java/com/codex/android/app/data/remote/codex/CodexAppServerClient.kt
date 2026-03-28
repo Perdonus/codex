@@ -3,6 +3,8 @@ package com.codex.android.app.data.remote.codex
 import com.codex.android.app.core.model.CachedThread
 import com.codex.android.app.core.model.ChatMessage
 import com.codex.android.app.core.model.ChatRole
+import com.codex.android.app.core.model.CodexRateLimitSnapshot
+import com.codex.android.app.core.model.CodexRateLimitWindow
 import com.codex.android.app.core.model.MessageStatus
 import com.codex.android.app.core.model.ModelOption
 import com.codex.android.app.core.model.OpenAiAuthMode
@@ -128,6 +130,15 @@ class CodexAppServerClient(
             },
         )
         return parseAccountStatus(response)
+    }
+
+    suspend fun getAccountRateLimits(): CodexRateLimitSnapshot {
+        val response = request(
+            method = "account/rateLimits/read",
+            params = JsonNull,
+        )
+        val snapshot = response["rateLimits"]?.jsonObject ?: buildJsonObject { }
+        return parseRateLimitSnapshot(snapshot)
     }
 
     suspend fun startChatGptLogin(): ChatGptLoginSession {
@@ -346,6 +357,12 @@ class CodexAppServerClient(
                 ),
             )
 
+            "account/rateLimits/updated" -> _events.tryEmit(
+                CodexEvent.AccountRateLimitsUpdated(
+                    snapshot = parseRateLimitSnapshot(params["rateLimits"]?.jsonObject ?: buildJsonObject { }),
+                ),
+            )
+
             "account/login/completed" -> _events.tryEmit(
                 CodexEvent.AccountLoginCompleted(
                     loginId = params.stringOrNull("loginId"),
@@ -486,6 +503,30 @@ class CodexAppServerClient(
         )
     }
 
+    private fun parseRateLimitSnapshot(response: JsonObject): CodexRateLimitSnapshot {
+        return CodexRateLimitSnapshot(
+            limitId = response.stringOrNull("limitId"),
+            limitName = response.stringOrNull("limitName"),
+            primary = response["primary"]
+                ?.takeUnless { it is JsonNull }
+                ?.jsonObject
+                ?.let(::parseRateLimitWindow),
+            secondary = response["secondary"]
+                ?.takeUnless { it is JsonNull }
+                ?.jsonObject
+                ?.let(::parseRateLimitWindow),
+            planType = response.stringOrNull("planType"),
+        )
+    }
+
+    private fun parseRateLimitWindow(response: JsonObject): CodexRateLimitWindow {
+        return CodexRateLimitWindow(
+            usedPercent = response.int("usedPercent"),
+            windowDurationMins = response.longOrNull("windowDurationMins"),
+            resetsAt = response.longOrNull("resetsAt"),
+        )
+    }
+
     private fun parseAuthMode(value: String?): OpenAiAuthMode? {
         return when (value) {
             "apikey", "apiKey" -> OpenAiAuthMode.API_KEY
@@ -497,9 +538,11 @@ class CodexAppServerClient(
 
     private fun JsonObject.string(key: String): String = this[key]?.jsonPrimitive?.content.orEmpty()
     private fun JsonObject.stringOrNull(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
+    private fun JsonObject.int(key: String): Int = this[key]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
     private fun JsonObject.bool(key: String): Boolean = this[key]?.jsonPrimitive?.booleanOrNull ?: false
     private fun JsonObject.boolOrFalse(key: String): Boolean = this[key]?.jsonPrimitive?.booleanOrNull ?: false
     private fun JsonObject.long(key: String): Long = this[key]?.jsonPrimitive?.content?.toLongOrNull() ?: 0L
+    private fun JsonObject.longOrNull(key: String): Long? = this[key]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
     private fun JsonArray?.orEmpty(): JsonArray = this ?: JsonArray(emptyList())
 }
 
@@ -544,6 +587,10 @@ sealed interface CodexEvent {
     data class AccountUpdated(
         val authMode: OpenAiAuthMode?,
         val planType: String?,
+    ) : CodexEvent
+
+    data class AccountRateLimitsUpdated(
+        val snapshot: CodexRateLimitSnapshot,
     ) : CodexEvent
 
     data class AccountLoginCompleted(

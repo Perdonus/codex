@@ -8,29 +8,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
 private val DarkScheme = darkColorScheme(
-    primary = Color(0xFF66C7F4),
-    onPrimary = Color(0xFF06263A),
-    secondary = Color(0xFFF3A45D),
-    background = Color(0xFF09131C),
-    onBackground = Color(0xFFF4F7FB),
-    surface = Color(0xFF10202E),
-    onSurface = Color(0xFFF4F7FB),
-    surfaceContainer = Color(0xFF132738),
-    surfaceContainerHigh = Color(0xFF183042),
-    surfaceContainerHighest = Color(0xFF1D394D),
+    primary = Color(0xFF6FD3C1),
+    onPrimary = Color(0xFF05231E),
+    secondary = Color(0xFFFFB37A),
+    background = Color(0xFF0C141B),
+    onBackground = Color(0xFFF8F4EC),
+    surface = Color(0xFF111D25),
+    onSurface = Color(0xFFF8F4EC),
+    surfaceContainer = Color(0xFF162630),
+    surfaceContainerHigh = Color(0xFF1A2E39),
+    surfaceContainerHighest = Color(0xFF233847),
 )
 
 private val LightScheme = lightColorScheme(
-    primary = Color(0xFF0D81B8),
-    onPrimary = Color.White,
-    secondary = Color(0xFFBE6A28),
-    background = Color(0xFFF3F7FB),
-    onBackground = Color(0xFF08141F),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF08141F),
-    surfaceContainer = Color(0xFFEAF1F7),
-    surfaceContainerHigh = Color(0xFFE3EDF5),
-    surfaceContainerHighest = Color(0xFFD9E7F1),
+    primary = Color(0xFF197A73),
+    onPrimary = Color(0xFFF8F4EC),
+    secondary = Color(0xFFC96B39),
+    background = Color(0xFFF6EFE4),
+    onBackground = Color(0xFF171313),
+    surface = Color(0xFFFFFBF6),
+    onSurface = Color(0xFF171313),
+    surfaceContainer = Color(0xFFF0E6DA),
+    surfaceContainerHigh = Color(0xFFE8DDD0),
+    surfaceContainerHighest = Color(0xFFDFCFC0),
 )
 
 @Composable
@@ -44,4 +44,3 @@ fun CodexAndroidTheme(
         content = content,
     )
 }
-

@@ -4,6 +4,7 @@ import android.app.Application
 import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.codex.android.app.BuildConfig
 import com.codex.android.app.CodexMobileApp
 import com.codex.android.app.core.model.AccountDraft
 import com.codex.android.app.core.model.CachedThread
@@ -12,6 +13,9 @@ import com.codex.android.app.core.model.ChatRole
 import com.codex.android.app.core.model.ConnectionState
 import com.codex.android.app.core.model.ConnectionStatus
 import com.codex.android.app.core.model.ConversationBinding
+import com.codex.android.app.core.model.CodexRateLimitSnapshot
+import com.codex.android.app.core.model.CodexRateLimitWindow
+import com.codex.android.app.core.model.CodexUsageWindow
 import com.codex.android.app.core.model.GitHubRepo
 import com.codex.android.app.core.model.MessageStatus
 import com.codex.android.app.core.model.ModelOption
@@ -32,6 +36,7 @@ import com.codex.android.app.data.remote.ssh.ManagedRemoteSession
 import com.codex.android.app.data.remote.ssh.PortForwardHandle
 import java.io.File
 import java.time.Instant
+import kotlin.math.abs
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -83,6 +88,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(settings = it.settings.copy(showAccountSheet = show)) }
     }
 
+    fun toggleCodexProfileSheet(show: Boolean = !_uiState.value.settings.showCodexProfileSheet) {
+        _uiState.update { it.copy(settings = it.settings.copy(showCodexProfileSheet = show)) }
+    }
+
     fun consumeBannerMessage() {
         _uiState.update { it.copy(bannerMessage = null) }
     }
@@ -97,31 +106,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun connectDraftAccount() {
         val draft = _uiState.value.accountDraft
-        val port = draft.port.toIntOrNull()
-        if (draft.host.isBlank() || port == null || draft.username.isBlank() || draft.password.isBlank()) {
-            showMessage("Fill host, port, username and password.")
+        val username = draft.username.trim()
+        val password = draft.password
+        if (username.isBlank() || password.isBlank()) {
+            showMessage("Fill username and password.")
             return
         }
         viewModelScope.launch {
             _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Installing SSH key...")) }
             runCatching {
                 val bootstrap = remoteSshGateway.bootstrapPasswordAuth(
-                    host = draft.host.trim(),
-                    port = port,
-                    username = draft.username.trim(),
-                    password = draft.password,
+                    host = BuildConfig.DEFAULT_SERVER_HOST,
+                    port = BuildConfig.DEFAULT_SERVER_PORT,
+                    username = username,
+                    password = password,
                 )
                 val account = localStateRepository.upsertAccount(
-                    host = draft.host.trim(),
-                    port = port,
-                    username = draft.username.trim(),
+                    host = BuildConfig.DEFAULT_SERVER_HOST,
+                    port = BuildConfig.DEFAULT_SERVER_PORT,
+                    username = username,
                     homeDirectory = bootstrap.homeDirectory,
                     hostFingerprint = bootstrap.hostFingerprint,
                 )
                 sshKeyManager.store(account.id, bootstrap.keyPair)
                 _uiState.update {
                     it.copy(
-                        accountDraft = AccountDraft(host = draft.host.trim(), port = port.toString()),
+                        accountDraft = AccountDraft(username = username),
                         settings = it.settings.copy(showAccountSheet = false),
                     )
                 }
@@ -139,6 +149,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             localStateRepository.selectAccount(accountId)
             connectAccount(accountId)
+        }
+    }
+
+    fun selectCodexProfile(profileName: String) {
+        viewModelScope.launch {
+            val account = _uiState.value.selectedAccount ?: return@launch
+            val session = remoteSession ?: return@launch
+            _uiState.update {
+                it.copy(
+                    connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Switching Codex account..."),
+                    settings = it.settings.copy(showCodexProfileSheet = false),
+                )
+            }
+            runCatching {
+                session.activateCodexProfile(profileName)
+                connectAccount(account.id, forceRestartAppServer = true)
+            }.onFailure {
+                showMessage(it.message ?: "Unable to switch Codex account")
+            }
         }
     }
 
@@ -514,6 +543,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun connectAccount(accountId: String): Boolean {
+        return connectAccount(accountId = accountId, forceRestartAppServer = false)
+    }
+
+    private suspend fun connectAccount(accountId: String, forceRestartAppServer: Boolean): Boolean {
         reconnectJob?.cancel()
         val account = localStateRepository.state().value.accounts.firstOrNull { it.id == accountId } ?: return false
         closeRemoteSession()
@@ -529,7 +562,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val home = session.detectHomeDirectory()
             localStateRepository.upsertAccount(account.host, account.port, account.username, home, account.hostFingerprint)
             val appServerPort = session.appServerPortFor(account.username)
-            session.ensureCodexAppServer(appServerPort)
+            session.ensureCodexAppServer(appServerPort, forceRestart = forceRestartAppServer)
             val forwarder = session.openLocalPortForward(appServerPort)
             portForwardHandle = forwarder
             val client = container.newCodexClient()
@@ -542,15 +575,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 localStateRepository.upsertThreadCache(thread)
             }
             val accountStatus = client.getAccount()
+            val rateLimits = runCatching { client.getAccountRateLimits() }.getOrNull()
             _uiState.update {
                 it.copy(
                     connectionState = ConnectionState(ConnectionStatus.CONNECTED),
                     models = models,
                     composer = it.composer.copy(selectedModel = chooseDefaultModel(models, it.composer.selectedModel)),
-                    openAiAccount = mapAccountStatus(accountStatus),
+                    openAiAccount = mapAccountStatus(accountStatus, rateLimits = rateLimits),
                 )
             }
             refreshDirectory(home)
+            syncCodexProfiles(
+                autoSaveCurrent = accountStatus.account?.email != null,
+                activeEmail = accountStatus.account?.email,
+                activePlanType = accountStatus.account?.planType,
+                rateLimits = rateLimits,
+            )
             if (_uiState.value.selectedThreadId == null) {
                 _uiState.value.threads.firstOrNull()?.threadId?.let(::selectThread)
             }
@@ -590,6 +630,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         authModeHint = event.authMode,
                         planTypeHint = event.planType,
                     )
+                    is CodexEvent.AccountRateLimitsUpdated -> {
+                        _uiState.update { state ->
+                            state.copy(
+                                openAiAccount = state.openAiAccount.copy(rateLimits = event.snapshot),
+                            )
+                        }
+                        viewModelScope.launch {
+                            syncCodexProfiles(rateLimits = event.snapshot)
+                        }
+                    }
                     is CodexEvent.AccountLoginCompleted -> {
                         if (event.success) {
                             refreshOpenAiAccountStatus(refreshToken = true)
@@ -792,6 +842,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 connectionState = ConnectionState(ConnectionStatus.DISCONNECTED),
                 composer = it.composer.copy(isSending = false),
                 openAiAccount = OpenAiAccountState(),
+                codexProfiles = emptyList(),
                 pendingExternalUrl = null,
             )
         }
@@ -831,7 +882,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         runCatching { client.getAccount(refreshToken = refreshToken) }
             .onSuccess { status ->
-                applyOpenAiAccountStatus(status, authModeHint, planTypeHint)
+                val rateLimits = runCatching { client.getAccountRateLimits() }.getOrNull()
+                applyOpenAiAccountStatus(status, authModeHint, planTypeHint, rateLimits)
+                syncCodexProfiles(
+                    autoSaveCurrent = status.account?.email != null,
+                    activeEmail = status.account?.email,
+                    activePlanType = status.account?.planType ?: planTypeHint,
+                    rateLimits = rateLimits,
+                )
                 if (status.account != null || !status.requiresOpenAiAuth) {
                     openAiPollingJob?.cancel()
                 }
@@ -871,6 +929,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         status: CodexAccountStatus,
         authModeHint: OpenAiAuthMode? = null,
         planTypeHint: String? = null,
+        rateLimits: CodexRateLimitSnapshot? = null,
     ) {
         _uiState.update { state ->
             state.copy(
@@ -879,6 +938,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     previous = state.openAiAccount,
                     authModeHint = authModeHint,
                     planTypeHint = planTypeHint,
+                    rateLimits = rateLimits,
                 ),
             )
         }
@@ -906,10 +966,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 settings = it.settings.copy(
                     availableRepos = persisted.gitHubRepos,
                     showAccountSheet = it.settings.showAccountSheet,
+                    showCodexProfileSheet = it.settings.showCodexProfileSheet,
                     showSettings = it.settings.showSettings,
                     remoteGitRepos = it.settings.remoteGitRepos,
                 ),
             )
+        }
+    }
+
+    private suspend fun syncCodexProfiles(
+        autoSaveCurrent: Boolean = false,
+        activeEmail: String? = _uiState.value.openAiAccount.email,
+        activePlanType: String? = _uiState.value.openAiAccount.planType,
+        rateLimits: CodexRateLimitSnapshot? = _uiState.value.openAiAccount.rateLimits,
+    ) {
+        val session = remoteSession ?: return
+        if (autoSaveCurrent) {
+            activeEmail
+                ?.takeIf { it.isNotBlank() }
+                ?.let { email ->
+                    runCatching { session.saveCurrentCodexProfile(email) }
+                }
+        }
+        runCatching {
+            session.listCodexProfiles(
+                activeEmail = activeEmail,
+                activePlanType = activePlanType,
+            )
+        }.onSuccess { profiles ->
+            val fiveHourWindow = selectRateLimitWindow(rateLimits, targetDurationMins = 300L, fallbackLabel = "5H")
+            val weeklyWindow = selectRateLimitWindow(rateLimits, targetDurationMins = 10080L, fallbackLabel = "7D")
+            _uiState.update {
+                it.copy(
+                    codexProfiles = profiles.map { profile ->
+                        if (profile.isActive) {
+                            profile.copy(
+                                planType = activePlanType ?: rateLimits?.planType ?: profile.planType,
+                                fiveHourWindow = fiveHourWindow,
+                                weeklyWindow = weeklyWindow,
+                            )
+                        } else {
+                            profile
+                        }
+                    },
+                )
+            }
         }
     }
 
@@ -943,6 +1044,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         previous: OpenAiAccountState = OpenAiAccountState(),
         authModeHint: OpenAiAuthMode? = null,
         planTypeHint: String? = null,
+        rateLimits: CodexRateLimitSnapshot? = null,
     ): OpenAiAccountState {
         val account = status.account
         val resolvedMode = account?.authMode ?: authModeHint ?: previous.authMode
@@ -953,6 +1055,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             authMode = resolvedMode,
             email = account?.email,
             planType = account?.planType ?: planTypeHint ?: previous.planType,
+            rateLimits = rateLimits ?: previous.rateLimits,
             loginState = when {
                 account != null -> OpenAiLoginState.SIGNED_IN
                 status.requiresOpenAiAuth && previous.pendingLoginId != null -> OpenAiLoginState.WAITING_BROWSER_AUTH
@@ -967,5 +1070,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun normalizeRepoUrl(url: String): String {
         return url.removeSuffix(".git").replace("git@github.com:", "https://github.com/")
+    }
+
+    private fun selectRateLimitWindow(
+        snapshot: CodexRateLimitSnapshot?,
+        targetDurationMins: Long,
+        fallbackLabel: String,
+    ): CodexUsageWindow {
+        val windows = listOfNotNull(snapshot?.primary, snapshot?.secondary)
+        val best = windows.minByOrNull { window ->
+            abs(((window.windowDurationMins ?: targetDurationMins) - targetDurationMins).toInt())
+        }
+        return best?.toUsageWindow(fallbackLabel) ?: CodexUsageWindow(label = fallbackLabel, valueLabel = "Sync")
+    }
+
+    private fun CodexRateLimitWindow.toUsageWindow(fallbackLabel: String): CodexUsageWindow {
+        return CodexUsageWindow(
+            label = when (windowDurationMins) {
+                300L -> "5H"
+                10080L -> "7D"
+                else -> fallbackLabel
+            },
+            valueLabel = "${usedPercent.coerceIn(0, 100)}%",
+            progress = usedPercent.coerceIn(0, 100) / 100f,
+        )
     }
 }

@@ -160,10 +160,37 @@ enum class ConnectionStatus {
 }
 
 data class AccountDraft(
-    val host: String = "",
-    val port: String = "22",
     val username: String = "",
     val password: String = "",
+)
+
+data class CodexUsageWindow(
+    val label: String,
+    val valueLabel: String,
+    val progress: Float? = null,
+)
+
+data class CodexProfile(
+    val name: String,
+    val isActive: Boolean,
+    val email: String? = null,
+    val planType: String? = null,
+    val fiveHourWindow: CodexUsageWindow = CodexUsageWindow(label = "5H", valueLabel = "Sync"),
+    val weeklyWindow: CodexUsageWindow = CodexUsageWindow(label = "7D", valueLabel = "Sync"),
+)
+
+data class CodexRateLimitWindow(
+    val usedPercent: Int,
+    val windowDurationMins: Long? = null,
+    val resetsAt: Long? = null,
+)
+
+data class CodexRateLimitSnapshot(
+    val limitId: String? = null,
+    val limitName: String? = null,
+    val primary: CodexRateLimitWindow? = null,
+    val secondary: CodexRateLimitWindow? = null,
+    val planType: String? = null,
 )
 
 data class ComposerState(
@@ -179,6 +206,7 @@ data class OpenAiAccountState(
     val authMode: OpenAiAuthMode? = null,
     val email: String? = null,
     val planType: String? = null,
+    val rateLimits: CodexRateLimitSnapshot? = null,
     val loginState: OpenAiLoginState = OpenAiLoginState.IDLE,
     val pendingLoginId: String? = null,
     val pendingAuthUrl: String? = null,
@@ -210,6 +238,7 @@ data class SidebarState(
 data class SettingsState(
     val showSettings: Boolean = false,
     val showAccountSheet: Boolean = false,
+    val showCodexProfileSheet: Boolean = false,
     val availableRepos: List<GitHubRepo> = emptyList(),
     val remoteGitRepos: List<RemoteGitRepository> = emptyList(),
 )
