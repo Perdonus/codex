@@ -98,7 +98,7 @@ data class BootstrapResult(
     val hostFingerprint: String?,
 )
 
-class ManagedRemoteSession(
+internal class ManagedRemoteSession(
     private val context: Context,
     private val client: AndroidSshClient,
     private val sftpClient: SFTPClient,

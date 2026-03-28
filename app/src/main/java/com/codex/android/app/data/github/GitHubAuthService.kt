@@ -70,6 +70,7 @@ class GitHubAuthService(
                 else -> throw IOException("GitHub device flow failed: ${error ?: "unknown_error"}")
             }
         }
+        error("Unreachable")
     }
 
     suspend fun fetchSession(accessToken: String): GitHubSession = withContext(Dispatchers.IO) {

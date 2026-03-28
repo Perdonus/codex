@@ -172,9 +172,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val account = _uiState.value.selectedAccount ?: return@launch
             runCatching {
-                codexClient?.listThreads().orEmpty()
+                val threads = codexClient?.listThreads().orEmpty()
                     .map { it.copy(accountId = account.id) }
-                    .forEach(localStateRepository::upsertThreadCache)
+                for (thread in threads) {
+                    localStateRepository.upsertThreadCache(thread)
+                }
             }.onFailure { showMessage(it.message ?: "Thread refresh failed") }
         }
     }
@@ -536,7 +538,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             observeCodexEvents(client)
             val models = client.listModels()
             val threads = client.listThreads().map { it.copy(accountId = account.id) }
-            threads.forEach(localStateRepository::upsertThreadCache)
+            for (thread in threads) {
+                localStateRepository.upsertThreadCache(thread)
+            }
             val accountStatus = client.getAccount()
             _uiState.update {
                 it.copy(
