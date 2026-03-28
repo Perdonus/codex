@@ -109,11 +109,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val username = draft.username.trim()
         val password = draft.password
         if (username.isBlank() || password.isBlank()) {
-            showMessage("Fill username and password.")
+            showMessage("Введите логин и пароль.")
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Installing SSH key...")) }
+            _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Устанавливаю SSH-ключ...")) }
             runCatching {
                 val bootstrap = remoteSshGateway.bootstrapPasswordAuth(
                     host = BuildConfig.DEFAULT_SERVER_HOST,
@@ -138,9 +138,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 connectAccount(account.id)
             }.onFailure { error ->
                 _uiState.update {
-                    it.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_AUTH, error.message ?: "Authentication failed"))
+                    it.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_AUTH, error.message ?: "Ошибка входа"))
                 }
-                showMessage(error.message ?: "Account bootstrap failed")
+                showMessage(error.message ?: "Не удалось подготовить аккаунт")
             }
         }
     }
@@ -158,7 +158,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val session = remoteSession ?: return@launch
             _uiState.update {
                 it.copy(
-                    connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Switching Codex account..."),
+                    connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Переключаю аккаунт Codex..."),
                     settings = it.settings.copy(showCodexProfileSheet = false),
                 )
             }
@@ -166,7 +166,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 session.activateCodexProfile(profileName)
                 connectAccount(account.id, forceRestartAppServer = true)
             }.onFailure {
-                showMessage(it.message ?: "Unable to switch Codex account")
+                showMessage(it.message ?: "Не удалось переключить аккаунт Codex")
             }
         }
     }
@@ -206,7 +206,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 for (thread in threads) {
                     localStateRepository.upsertThreadCache(thread)
                 }
-            }.onFailure { showMessage(it.message ?: "Thread refresh failed") }
+            }.onFailure { showMessage(it.message ?: "Не удалось обновить диалоги") }
         }
     }
 
@@ -241,7 +241,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     settings = it.settings.copy(showSettings = true),
                 )
             }
-            showMessage("Sign in to ChatGPT in Settings before sending messages.")
+            showMessage("Сначала войдите в ChatGPT в настройках.")
             return
         }
         viewModelScope.launch {
@@ -291,7 +291,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         connectionState = ConnectionState(ConnectionStatus.FAILED_SERVER, error.message),
                     )
                 }
-                showMessage(error.message ?: "Unable to send message")
+                showMessage(error.message ?: "Не удалось отправить сообщение")
             }
         }
     }
@@ -302,7 +302,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val binding = localStateRepository.state().value.conversationBindings.firstOrNull { it.threadId == threadId } ?: return@launch
             val turnId = binding.lastKnownTurnId ?: return@launch
             runCatching { codexClient?.interruptTurn(threadId, turnId) }
-                .onFailure { showMessage(it.message ?: "Interrupt failed") }
+                .onFailure { showMessage(it.message ?: "Не удалось остановить ответ") }
                 .onSuccess { _uiState.update { it.copy(composer = it.composer.copy(isSending = false)) } }
         }
     }
@@ -340,7 +340,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(sidebar = SidebarState(currentDirectory = resolved, remoteFiles = nodes, currentThreadId = it.selectedThreadId))
                 }
             }.onFailure {
-                showMessage(it.message ?: "Directory read failed")
+                showMessage(it.message ?: "Не удалось открыть папку")
             }
         }
     }
@@ -358,8 +358,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val fileName = resolved.substringAfterLast('/')
             val target = File(targetDir, fileName)
             runCatching { session.downloadToLocal(resolved, target) }
-                .onSuccess { showMessage("Saved to ${it.absolutePath}") }
-                .onFailure { showMessage(it.message ?: "Download failed") }
+                .onSuccess { showMessage("Сохранено: ${it.absolutePath}") }
+                .onFailure { showMessage(it.message ?: "Не удалось скачать файл") }
         }
     }
 
@@ -376,7 +376,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             val client = codexClient ?: run {
-                showMessage("Connect to the server before starting ChatGPT sign-in.")
+                showMessage("Сначала подключитесь к серверу.")
                 return@launch
             }
             _uiState.update {
@@ -408,11 +408,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         state.copy(
                             openAiAccount = state.openAiAccount.copy(
                                 loginState = OpenAiLoginState.ERROR,
-                                lastError = error.message ?: "Unable to start ChatGPT login",
+                                lastError = error.message ?: "Не удалось начать вход в ChatGPT",
                             ),
                         )
                     }
-                    showMessage(error.message ?: "GPT login start failed")
+                    showMessage(error.message ?: "Не удалось запустить вход в ChatGPT")
                 }
         }
     }
@@ -421,11 +421,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val loginId = _uiState.value.openAiAccount.pendingLoginId ?: return@launch
             val client = codexClient ?: run {
-                showMessage("Connect to the server before cancelling ChatGPT sign-in.")
+                showMessage("Сначала подключитесь к серверу.")
                 return@launch
             }
             runCatching { client.cancelAccountLogin(loginId) }
-                .onFailure { showMessage(it.message ?: "Unable to cancel GPT login") }
+                .onFailure { showMessage(it.message ?: "Не удалось отменить вход в ChatGPT") }
                 .onSuccess {
                     openAiPollingJob?.cancel()
                     _uiState.update { state ->
@@ -445,7 +445,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun logoutOpenAiAccount() {
         viewModelScope.launch {
             val client = codexClient ?: run {
-                showMessage("Connect to the server before logging out.")
+                showMessage("Сначала подключитесь к серверу.")
                 return@launch
             }
             runCatching { client.logoutAccount() }
@@ -453,7 +453,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     openAiPollingJob?.cancel()
                     refreshOpenAiAccountStatus()
                 }
-                .onFailure { showMessage(it.message ?: "GPT logout failed") }
+                .onFailure { showMessage(it.message ?: "Не удалось выйти из ChatGPT") }
         }
     }
 
@@ -482,7 +482,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }.onFailure {
-                showMessage(it.message ?: "GitHub login failed")
+                showMessage(it.message ?: "Не удалось войти в GitHub")
             }
         }
     }
@@ -495,7 +495,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     localStateRepository.updateGitHubRepos(it)
                     _uiState.update { state -> state.copy(settings = state.settings.copy(availableRepos = it)) }
                 }
-                .onFailure { showMessage(it.message ?: "GitHub repo refresh failed") }
+                .onFailure { showMessage(it.message ?: "Не удалось обновить репозитории GitHub") }
         }
     }
 
@@ -526,8 +526,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val binding = localStateRepository.state().value.conversationBindings.first { it.threadId == threadId }
             ensureAgents(threadId, binding, binding.pinnedRepoRemotePath ?: binding.cwdOverride ?: _uiState.value.sidebar.currentDirectory)
             showMessage(
-                if (remoteMatch != null) "Pinned ${repo.fullName} at ${remoteMatch.rootPath}"
-                else "Pinned ${repo.fullName}; no matching remote checkout was found",
+                if (remoteMatch != null) "Репозиторий ${repo.fullName} закреплён: ${remoteMatch.rootPath}"
+                else "Репозиторий ${repo.fullName} закреплён, но папка на сервере не найдена",
             )
         }
     }
@@ -550,7 +550,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         reconnectJob?.cancel()
         val account = localStateRepository.state().value.accounts.firstOrNull { it.id == accountId } ?: return false
         closeRemoteSession()
-        _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Connecting to ${account.displayName}")) }
+        _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Подключение к ${account.displayName}")) }
         return runCatching {
             val session = remoteSshGateway.openSession(
                 host = account.host,
@@ -651,7 +651,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         loginState = OpenAiLoginState.ERROR,
                                         pendingLoginId = null,
                                         pendingAuthUrl = null,
-                                        lastError = event.error ?: "ChatGPT login failed",
+                                        lastError = event.error ?: "Не удалось войти в ChatGPT",
                                     ),
                                 )
                             }
@@ -775,7 +775,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             localStateRepository.setThreadMessages(
                 threadId = threadId,
                 accountId = accountId,
-                title = currentThread?.title ?: "New chat",
+                title = currentThread?.title ?: "Новый чат",
                 preview = nextMessages.firstOrNull()?.text ?: currentThread?.preview.orEmpty(),
                 cwd = currentThread?.cwd ?: _uiState.value.sidebar.currentDirectory,
                 status = ThreadRuntimeStatus.RUNNING,
@@ -900,7 +900,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         openAiAccount = state.openAiAccount.copy(
                             isLoading = false,
                             loginState = OpenAiLoginState.ERROR,
-                            lastError = error.message ?: "Unable to refresh GPT account",
+                            lastError = error.message ?: "Не удалось обновить аккаунт GPT",
                         ),
                     )
                 }
@@ -1081,7 +1081,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val best = windows.minByOrNull { window ->
             abs(((window.windowDurationMins ?: targetDurationMins) - targetDurationMins).toInt())
         }
-        return best?.toUsageWindow(fallbackLabel) ?: CodexUsageWindow(label = fallbackLabel, valueLabel = "Sync")
+        return best?.toUsageWindow(fallbackLabel) ?: CodexUsageWindow(label = fallbackLabel, valueLabel = "Синхр.")
     }
 
     private fun CodexRateLimitWindow.toUsageWindow(fallbackLabel: String): CodexUsageWindow {

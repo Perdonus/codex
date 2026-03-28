@@ -175,8 +175,8 @@ data class CodexProfile(
     val isActive: Boolean,
     val email: String? = null,
     val planType: String? = null,
-    val fiveHourWindow: CodexUsageWindow = CodexUsageWindow(label = "5H", valueLabel = "Sync"),
-    val weeklyWindow: CodexUsageWindow = CodexUsageWindow(label = "7D", valueLabel = "Sync"),
+    val fiveHourWindow: CodexUsageWindow = CodexUsageWindow(label = "5Ч", valueLabel = "Синхр."),
+    val weeklyWindow: CodexUsageWindow = CodexUsageWindow(label = "7Д", valueLabel = "Синхр."),
 )
 
 data class CodexRateLimitWindow(

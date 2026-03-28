@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -92,8 +93,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -137,13 +140,17 @@ fun MainScreen(viewModel: MainViewModel) {
 
     val showWelcomeGate = state.selectedAccount == null
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-    ) {
-        AnimatedLiquidBackground()
-        SystemBarScrims()
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (showWelcomeGate) {
+            AnimatedLiquidBackground()
+            SystemBarScrims()
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background),
+            )
+        }
 
         if (showWelcomeGate) {
             WelcomeGate(
@@ -282,7 +289,7 @@ private fun CodexHeader(
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                 if (onOpenSidebar != null) {
                     FilledIconButton(onClick = onOpenSidebar) {
-                        Icon(Icons.Rounded.Menu, contentDescription = "Open sidebar")
+                        Icon(Icons.Rounded.Menu, contentDescription = "Открыть боковую панель")
                     }
                 }
             }
@@ -292,6 +299,7 @@ private fun CodexHeader(
                 fontWeight = FontWeight.Black,
                 modifier = Modifier.weight(1f),
                 textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onSurface,
             )
             Row(
                 modifier = Modifier.weight(1f),
@@ -303,7 +311,7 @@ private fun CodexHeader(
                         text = state.selectedCodexProfile?.email
                             ?: state.selectedCodexProfile?.name
                             ?: state.openAiAccount.email
-                            ?: "Codex",
+                            ?: "Кодекс",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -329,7 +337,7 @@ private fun CodexHeader(
                             tint = MaterialTheme.colorScheme.primary,
                         )
                         Text(
-                            text = state.selectedAccount?.username ?: "guest",
+                            text = state.selectedAccount?.username ?: "гость",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -390,7 +398,7 @@ private fun SidebarServerCard(state: MainUiState, viewModel: MainViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Server", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                    Text("Сервер", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                     Text(
                         "${BuildConfig.DEFAULT_SERVER_HOST}:${BuildConfig.DEFAULT_SERVER_PORT}",
                         style = MaterialTheme.typography.bodyLarge,
@@ -398,17 +406,17 @@ private fun SidebarServerCard(state: MainUiState, viewModel: MainViewModel) {
                     )
                 }
                 OutlinedIconButton(onClick = { viewModel.toggleSettings(true) }) {
-                    Icon(Icons.Rounded.Settings, contentDescription = "Settings")
+                    Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
                 }
             }
             Text(
                 text = state.connectionState.message ?: when (state.connectionState.status) {
-                    ConnectionStatus.CONNECTED -> "Connected"
-                    ConnectionStatus.CONNECTING -> "Connecting"
-                    ConnectionStatus.RECONNECTING -> "Reconnecting"
-                    ConnectionStatus.FAILED_AUTH -> "Authentication failed"
-                    ConnectionStatus.FAILED_SERVER -> "Server unavailable"
-                    ConnectionStatus.DISCONNECTED -> "Disconnected"
+                    ConnectionStatus.CONNECTED -> "Подключено"
+                    ConnectionStatus.CONNECTING -> "Подключение"
+                    ConnectionStatus.RECONNECTING -> "Переподключение"
+                    ConnectionStatus.FAILED_AUTH -> "Ошибка входа"
+                    ConnectionStatus.FAILED_SERVER -> "Сервер недоступен"
+                    ConnectionStatus.DISCONNECTED -> "Нет подключения"
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -422,7 +430,7 @@ private fun SidebarServerCard(state: MainUiState, viewModel: MainViewModel) {
             ) {
                 Icon(Icons.Rounded.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Add user")
+                Text("Добавить пользователя")
             }
             state.accounts.forEach { account ->
                 val selected = account.id == state.selectedAccountId
@@ -486,9 +494,9 @@ private fun ThreadSection(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Dialogs", style = MaterialTheme.typography.titleMedium)
+                Text("Диалоги", style = MaterialTheme.typography.titleMedium)
                 FilledTonalButton(onClick = viewModel::createThread) {
-                    Text("New")
+                    Text("Новый")
                 }
             }
             LazyColumn(
@@ -526,7 +534,7 @@ private fun ThreadSection(
                                 RunningDot(thread.status)
                             }
                             Text(
-                                text = thread.preview.ifBlank { "Empty dialog" },
+                                text = thread.preview.ifBlank { "Пустой диалог" },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
@@ -604,7 +612,7 @@ private fun FileSection(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Files", style = MaterialTheme.typography.titleMedium)
+                    Text("Файлы", style = MaterialTheme.typography.titleMedium)
                     Text(
                         text = state.sidebar.currentDirectory,
                         style = MaterialTheme.typography.bodyMedium,
@@ -614,7 +622,7 @@ private fun FileSection(
                     )
                 }
                 OutlinedIconButton(onClick = { viewModel.refreshDirectory() }) {
-                    Icon(Icons.Rounded.Refresh, contentDescription = "Refresh files")
+                    Icon(Icons.Rounded.Refresh, contentDescription = "Обновить файлы")
                 }
             }
             val parentDirectory = remember(state.sidebar.currentDirectory) { parentDirectoryOf(state.sidebar.currentDirectory) }
@@ -759,17 +767,22 @@ private fun EmptyChatState(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("Codex", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
             Text(
-                text = state.selectedAccount?.let { "Connected as ${it.username}" } ?: "Login to begin",
+                "Codex",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Black,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                text = state.selectedAccount?.let { "Подключено как ${it.username}" } ?: "Войдите, чтобы начать",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
             Text(
                 text = when {
-                    state.openAiAccount.requiresOpenAiAuth -> "Sign in to ChatGPT before sending the first message."
-                    else -> "Open an existing dialog or start a fresh one from the left panel."
+                    state.openAiAccount.requiresOpenAiAuth -> "Войдите в ChatGPT перед первым сообщением."
+                    else -> "Откройте диалог слева или создайте новый."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
@@ -798,22 +811,22 @@ private fun AuthRequiredBanner(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text("ChatGPT sign-in required", style = MaterialTheme.typography.titleMedium)
+            Text("Нужен вход в ChatGPT", style = MaterialTheme.typography.titleMedium)
             Text(
                 text = when (state.openAiAccount.loginState) {
-                    OpenAiLoginState.WAITING_BROWSER_AUTH -> "Finish the browser login flow, then return here."
-                    OpenAiLoginState.ERROR -> state.openAiAccount.lastError ?: "Authentication failed."
-                    else -> "This Codex session needs a ChatGPT account before it can answer."
+                    OpenAiLoginState.WAITING_BROWSER_AUTH -> "Завершите вход в браузере и вернитесь сюда."
+                    OpenAiLoginState.ERROR -> state.openAiAccount.lastError ?: "Не удалось выполнить вход."
+                    else -> "Этой сессии Codex нужен аккаунт ChatGPT, чтобы отвечать."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilledTonalButton(onClick = viewModel::startOpenAiLogin) {
-                    Text(if (state.openAiAccount.loginState == OpenAiLoginState.WAITING_BROWSER_AUTH) "Open again" else "Sign in")
+                    Text(if (state.openAiAccount.loginState == OpenAiLoginState.WAITING_BROWSER_AUTH) "Открыть снова" else "Войти")
                 }
                 OutlinedButton(onClick = { viewModel.toggleCodexProfileSheet(true) }) {
-                    Text("Accounts")
+                    Text("Аккаунты")
                 }
             }
         }
@@ -852,7 +865,7 @@ private fun ChatMessageRow(
             ) {
                 if (role == ChatRole.REASONING) {
                     Text(
-                        text = "Thinking",
+                        text = "Размышления",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.secondary,
                     )
@@ -864,7 +877,7 @@ private fun ChatMessageRow(
                 )
                 AnimatedVisibility(visible = isStreaming) {
                     Text(
-                        text = "Streaming now",
+                        text = "Ответ печатается",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -929,7 +942,7 @@ private fun FloatingComposer(
                         decorationBox = { innerTextField ->
                             if (state.composer.text.isBlank()) {
                                 Text(
-                                    text = if (composerEnabled) "Напиши Codex сообщение" else "Сначала войдите в ChatGPT",
+                                    text = if (composerEnabled) "Напишите сообщение для Codex" else "Сначала войдите в ChatGPT",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -948,7 +961,7 @@ private fun FloatingComposer(
                     ) {
                         Icon(
                             imageVector = if (state.composer.isSending) Icons.Rounded.Stop else Icons.Rounded.Send,
-                            contentDescription = if (state.composer.isSending) "Stop generation" else "Send message",
+                            contentDescription = if (state.composer.isSending) "Остановить ответ" else "Отправить сообщение",
                         )
                     }
                 }
@@ -966,7 +979,7 @@ private fun FloatingComposer(
                             Text(
                                 text = state.models.firstOrNull { it.model == state.composer.selectedModel }?.displayName
                                     ?: state.composer.selectedModel
-                                    ?: "Model",
+                                    ?: "Модель",
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -988,12 +1001,12 @@ private fun FloatingComposer(
                 Box {
                     AssistChip(
                         onClick = { effortExpanded = true },
-                        label = { Text("Think ${state.composer.selectedReasoningEffort.name.lowercase()}") },
+                        label = { Text("Раздумья: ${reasoningEffortLabel(state.composer.selectedReasoningEffort)}") },
                     )
                     DropdownMenu(expanded = effortExpanded, onDismissRequest = { effortExpanded = false }) {
                         ReasoningEffort.entries.forEach { effort ->
                             DropdownMenuItem(
-                                text = { Text(effort.name.lowercase()) },
+                                text = { Text(reasoningEffortLabel(effort)) },
                                 onClick = {
                                     viewModel.selectReasoning(effort)
                                     effortExpanded = false
@@ -1007,7 +1020,7 @@ private fun FloatingComposer(
 
                 if (state.composer.isSending) {
                     Text(
-                        text = "Running",
+                        text = "Идёт ответ",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.secondary,
                     )
@@ -1032,7 +1045,7 @@ private fun SettingsSheet(state: MainUiState, viewModel: MainViewModel) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("Settings", style = MaterialTheme.typography.titleLarge)
+            Text("Настройки", style = MaterialTheme.typography.titleLarge)
 
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
@@ -1042,9 +1055,9 @@ private fun SettingsSheet(state: MainUiState, viewModel: MainViewModel) {
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text("GPT Account", style = MaterialTheme.typography.titleMedium)
+                    Text("Аккаунт GPT", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        text = state.openAiAccount.email ?: "Not signed in",
+                        text = state.openAiAccount.email ?: "Вход не выполнен",
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -1052,10 +1065,10 @@ private fun SettingsSheet(state: MainUiState, viewModel: MainViewModel) {
                         text = buildString {
                             append(
                                 when (state.openAiAccount.authMode) {
-                                    OpenAiAuthMode.API_KEY -> "Auth mode: API key"
-                                    OpenAiAuthMode.CHATGPT -> "Auth mode: ChatGPT"
-                                    OpenAiAuthMode.CHATGPT_AUTH_TOKENS -> "Auth mode: tokens"
-                                    null -> "Auth mode: unknown"
+                                    OpenAiAuthMode.API_KEY -> "Режим входа: API key"
+                                    OpenAiAuthMode.CHATGPT -> "Режим входа: ChatGPT"
+                                    OpenAiAuthMode.CHATGPT_AUTH_TOKENS -> "Режим входа: токены"
+                                    null -> "Режим входа: неизвестно"
                                 },
                             )
                             state.openAiAccount.planType?.let {
@@ -1071,17 +1084,17 @@ private fun SettingsSheet(state: MainUiState, viewModel: MainViewModel) {
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalButton(onClick = viewModel::startOpenAiLogin) {
-                            Text(if (state.openAiAccount.authMode == null) "Sign in" else "Reauth")
+                            Text(if (state.openAiAccount.authMode == null) "Войти" else "Войти заново")
                         }
                         OutlinedButton(onClick = viewModel::refreshOpenAiAccount) {
-                            Text("Refresh")
+                            Text("Обновить")
                         }
                         OutlinedButton(onClick = viewModel::logoutOpenAiAccount) {
-                            Text("Logout")
+                            Text("Выйти")
                         }
                     }
                     OutlinedButton(onClick = { viewModel.toggleCodexProfileSheet(true) }) {
-                        Text("Codex accounts")
+                        Text("Аккаунты Codex")
                     }
                 }
             }
@@ -1096,19 +1109,19 @@ private fun SettingsSheet(state: MainUiState, viewModel: MainViewModel) {
                 ) {
                     Text("GitHub", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        text = state.gitHubSession?.userLogin ?: "Not signed in",
+                        text = state.gitHubSession?.userLogin ?: "Вход не выполнен",
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalButton(onClick = viewModel::startGitHubLogin) {
-                            Text(if (state.gitHubSession == null) "Login" else "Relogin")
+                            Text(if (state.gitHubSession == null) "Войти" else "Войти заново")
                         }
                         OutlinedButton(onClick = viewModel::refreshGitHubRepos) {
-                            Text("Refresh repos")
+                            Text("Обновить репо")
                         }
                         OutlinedButton(onClick = viewModel::scanRemoteRepositories) {
-                            Text("Scan server")
+                            Text("Сканировать сервер")
                         }
                     }
                     state.deviceFlow?.let { flow ->
@@ -1125,7 +1138,7 @@ private fun SettingsSheet(state: MainUiState, viewModel: MainViewModel) {
                                 FilledTonalButton(onClick = { viewModel.openExternalUrl(flow.verificationUri) }) {
                                     Icon(Icons.Rounded.Link, contentDescription = null)
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Open GitHub verification")
+                                    Text("Открыть подтверждение GitHub")
                                 }
                             }
                         }
@@ -1134,7 +1147,7 @@ private fun SettingsSheet(state: MainUiState, viewModel: MainViewModel) {
             }
 
             if (state.availableGitHubRepos.isNotEmpty()) {
-                Text("Pin Repo To Current Dialog", style = MaterialTheme.typography.titleMedium)
+                Text("Закрепить репозиторий за текущим диалогом", style = MaterialTheme.typography.titleMedium)
                 state.availableGitHubRepos.forEach { repo ->
                     Surface(
                         modifier = Modifier
@@ -1180,19 +1193,14 @@ private fun AccountSheet(state: MainUiState, viewModel: MainViewModel) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("SSH Login", style = MaterialTheme.typography.titleLarge)
-            Text(
-                text = "${BuildConfig.DEFAULT_SERVER_HOST}:${BuildConfig.DEFAULT_SERVER_PORT}",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text("Вход по SSH", style = MaterialTheme.typography.titleLarge)
             LabeledField(
-                label = "Username",
+                label = "Логин",
                 value = state.accountDraft.username,
                 onValueChange = { value -> viewModel.onDraftChanged { it.copy(username = value) } },
             )
             LabeledField(
-                label = "Password",
+                label = "Пароль",
                 value = state.accountDraft.password,
                 password = true,
                 imeAction = ImeAction.Done,
@@ -1205,7 +1213,7 @@ private fun AccountSheet(state: MainUiState, viewModel: MainViewModel) {
                 Text("Войти")
             }
             if (state.accounts.isNotEmpty()) {
-                Text("Saved users", style = MaterialTheme.typography.titleMedium)
+                Text("Сохранённые пользователи", style = MaterialTheme.typography.titleMedium)
                 state.accounts.forEach { account ->
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
@@ -1231,10 +1239,10 @@ private fun AccountSheet(state: MainUiState, viewModel: MainViewModel) {
                                 )
                             }
                             TextButton(onClick = { viewModel.selectAccount(account.id) }) {
-                                Text("Use")
+                                Text("Выбрать")
                             }
                             TextButton(onClick = { viewModel.deleteAccount(account.id) }) {
-                                Text("Delete", color = MaterialTheme.colorScheme.error)
+                                Text("Удалить", color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
@@ -1260,7 +1268,7 @@ private fun CodexProfileSheet(state: MainUiState, viewModel: MainViewModel) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("Codex Accounts", style = MaterialTheme.typography.titleLarge)
+            Text("Аккаунты Codex", style = MaterialTheme.typography.titleLarge)
             Text(
                 text = "Профили работают через ~/.codex/profiles/*.json и замену ~/.codex/auth.json на сервере.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1268,10 +1276,10 @@ private fun CodexProfileSheet(state: MainUiState, viewModel: MainViewModel) {
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilledTonalButton(onClick = viewModel::startOpenAiLogin) {
-                    Text("Add account")
+                    Text("Добавить аккаунт")
                 }
                 OutlinedButton(onClick = viewModel::refreshOpenAiAccount) {
-                    Text("Refresh")
+                    Text("Обновить")
                 }
             }
             if (state.codexProfiles.isEmpty()) {
@@ -1283,7 +1291,7 @@ private fun CodexProfileSheet(state: MainUiState, viewModel: MainViewModel) {
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("No saved Codex profiles yet", style = MaterialTheme.typography.titleMedium)
+                        Text("Сохранённых профилей Codex пока нет", style = MaterialTheme.typography.titleMedium)
                         Text(
                             "После первого успешного входа текущий auth.json будет сохранён сюда автоматически.",
                             style = MaterialTheme.typography.bodyMedium,
@@ -1421,9 +1429,9 @@ private fun WelcomeGate(
                 .navigationBarsPadding()
                 .imePadding()
                 .animateContentSize()
-                .padding(bottom = 12.dp),
+                .padding(bottom = 4.dp),
             shape = RoundedCornerShape(34.dp),
-            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
             shadowElevation = 24.dp,
             tonalElevation = 8.dp,
         ) {
@@ -1432,27 +1440,27 @@ private fun WelcomeGate(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 Text(
-                    text = "Login",
+                    text = "Вход",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Black,
                     color = Color.White,
                 )
                 LabeledField(
-                    label = "Username",
+                    label = "Логин",
                     value = state.accountDraft.username,
                     labelColor = Color.White,
-                    containerColor = Color.White.copy(alpha = 0.14f),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.86f),
                     textColor = Color.White,
                     placeholderColor = Color.White.copy(alpha = 0.72f),
                     onValueChange = { value -> viewModel.onDraftChanged { it.copy(username = value) } },
                 )
                 LabeledField(
-                    label = "Password",
+                    label = "Пароль",
                     value = state.accountDraft.password,
                     password = true,
                     imeAction = ImeAction.Done,
                     labelColor = Color.White,
-                    containerColor = Color.White.copy(alpha = 0.14f),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.86f),
                     textColor = Color.White,
                     placeholderColor = Color.White.copy(alpha = 0.72f),
                     onValueChange = { value -> viewModel.onDraftChanged { it.copy(password = value) } },
@@ -1473,15 +1481,16 @@ private fun WelcomeGate(
 
 @Composable
 private fun AnimatedLiquidBackground() {
+    val colorScheme = MaterialTheme.colorScheme
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(
                 Brush.linearGradient(
                     colors = listOf(
-                        Color(0xFFEEF4FF),
-                        Color(0xFFF9EEE2),
-                        Color(0xFFE5F4EE),
+                        colorScheme.background,
+                        colorScheme.surfaceContainer,
+                        colorScheme.surface,
                     ),
                     start = Offset.Zero,
                     end = Offset(1800f, 2400f),
@@ -1548,26 +1557,30 @@ private fun AnimatedLiquidBackground() {
             modifier = Modifier
                 .size(maxWidth * 0.82f)
                 .offset(x = maxWidth * blobOneX - maxWidth * 0.35f, y = maxHeight * blobOneY - maxWidth * 0.28f),
-            colors = listOf(Color(0xFF65C6B7), Color(0x332FA48F)),
+            colors = listOf(colorScheme.primary.copy(alpha = 0.42f), colorScheme.primary.copy(alpha = 0.04f)),
         )
         LiquidBlob(
             modifier = Modifier
                 .size(maxWidth * 0.94f)
                 .offset(x = maxWidth * blobTwoX - maxWidth * 0.42f, y = maxHeight * blobTwoY - maxWidth * 0.36f),
-            colors = listOf(Color(0xFFEA8A5A), Color(0x33F6C4A2)),
+            colors = listOf(colorScheme.secondary.copy(alpha = 0.34f), colorScheme.secondary.copy(alpha = 0.04f)),
         )
         LiquidBlob(
             modifier = Modifier
                 .size(maxWidth * 0.74f)
                 .offset(x = maxWidth * blobThreeX - maxWidth * 0.3f, y = maxHeight * blobThreeY - maxWidth * 0.24f),
-            colors = listOf(Color(0xFF4B9AE8), Color(0x3398C5FF)),
+            colors = listOf(colorScheme.tertiary.copy(alpha = 0.3f), colorScheme.tertiary.copy(alpha = 0.03f)),
         )
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
-                        colors = listOf(Color.White.copy(alpha = 0.12f), Color.Transparent, Color.White.copy(alpha = 0.08f)),
+                        colors = listOf(
+                            colorScheme.surface.copy(alpha = 0.18f),
+                            Color.Transparent,
+                            colorScheme.background.copy(alpha = 0.34f),
+                        ),
                     ),
                 ),
         )
@@ -1589,6 +1602,8 @@ private fun LiquidBlob(
 
 @Composable
 private fun SystemBarScrims() {
+    val density = LocalDensity.current
+    val navigationBarInset = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
     Box(
         modifier = Modifier
             .fillMaxSize(),
@@ -1600,8 +1615,8 @@ private fun SystemBarScrims() {
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.24f),
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.96f),
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.42f),
                             Color.Transparent,
                         ),
                     ),
@@ -1611,13 +1626,14 @@ private fun SystemBarScrims() {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(160.dp)
+                .height(236.dp + navigationBarInset)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.42f),
+                            MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.18f),
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.42f),
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.98f),
                         ),
                     ),
                 ),
@@ -1648,6 +1664,7 @@ private fun LabeledField(
                 value = value,
                 onValueChange = onValueChange,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = textColor),
+                cursorBrush = SolidColor(textColor),
                 keyboardOptions = KeyboardOptions(imeAction = imeAction),
                 keyboardActions = KeyboardActions.Default,
                 visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
@@ -1666,6 +1683,17 @@ private fun LabeledField(
                 },
             )
         }
+    }
+}
+
+private fun reasoningEffortLabel(effort: ReasoningEffort): String {
+    return when (effort) {
+        ReasoningEffort.NONE -> "выкл"
+        ReasoningEffort.MINIMAL -> "минимум"
+        ReasoningEffort.LOW -> "низко"
+        ReasoningEffort.MEDIUM -> "средне"
+        ReasoningEffort.HIGH -> "высоко"
+        ReasoningEffort.XHIGH -> "максимум"
     }
 }
 
