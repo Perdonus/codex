@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -96,7 +95,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -1602,8 +1600,6 @@ private fun LiquidBlob(
 
 @Composable
 private fun SystemBarScrims() {
-    val density = LocalDensity.current
-    val navigationBarInset = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
     Box(
         modifier = Modifier
             .fillMaxSize(),
@@ -1626,7 +1622,7 @@ private fun SystemBarScrims() {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(236.dp + navigationBarInset)
+                .height(272.dp)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
