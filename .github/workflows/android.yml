@@ -49,22 +49,30 @@ jobs:
 
           log_path = Path("gradle-build.log")
           lines = log_path.read_text(errors="replace").splitlines() if log_path.exists() else []
-          patterns = [
-              re.compile(r"(^e: )"),
-              re.compile(r"(^.* error: )"),
-              re.compile(r"(^FAILURE: )"),
-              re.compile(r"(^\* What went wrong:)"),
-              re.compile(r"(Execution failed|Could not resolve|Could not find|Unresolved reference|Compilation error|Exception is:)"),
+          marker_patterns = [
+              re.compile(r"^FAILURE: "),
+              re.compile(r"^\* What went wrong:"),
+              re.compile(r"^\* Exception is:"),
+              re.compile(r"^Caused by:"),
+              re.compile(r"^e: "),
+              re.compile(r"^.* error: "),
+              re.compile(r"(Execution failed|Could not resolve|Could not find|Unresolved reference|Compilation error)"),
           ]
 
-          matches = []
-          for line in lines:
-              if any(pattern.search(line) for pattern in patterns):
-                  stripped = line.strip()
-                  if stripped:
-                      matches.append(stripped)
+          collected = []
+          for index, line in enumerate(lines):
+              if any(pattern.search(line) for pattern in marker_patterns):
+                  window = lines[index:index + 8]
+                  collected.extend(item.strip() for item in window if item.strip())
 
-          snippet = matches[-25:] if matches else lines[-80:]
+          deduped = []
+          seen = set()
+          for item in collected:
+              if item not in seen:
+                  deduped.append(item)
+                  seen.add(item)
+
+          snippet = deduped[-30:] if deduped else lines[-120:]
           summary = "\n".join(snippet).strip() or "Gradle build failed without a captured summary."
           print("Gradle build failure summary:")
           print(summary)
