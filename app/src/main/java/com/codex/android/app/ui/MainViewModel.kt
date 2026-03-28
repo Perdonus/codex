@@ -1,6 +1,7 @@
 package com.codex.android.app.ui
 
 import android.app.Application
+import android.os.Build
 import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -62,13 +63,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var codexEventsJob: Job? = null
     private var reconnectJob: Job? = null
     private var openAiPollingJob: Job? = null
+    private val diagnosticEntries = ArrayDeque<String>()
 
     init {
         viewModelScope.launch {
+            appendDiagnostic("Приложение запущено")
             val persisted = localStateRepository.load()
             syncFromLocalState()
             persisted.selectedAccountId
-                ?.takeIf { sshKeyManager.loadPrivateKey(it) != null }
+                ?.takeIf { sshKeyManager.hasKey(it) }
                 ?.let { connectAccount(it) }
             localStateRepository.state().collectLatest {
                 syncFromLocalState()
@@ -113,33 +116,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         viewModelScope.launch {
+            appendDiagnostic("Старт входа по SSH для $username")
             _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Устанавливаю SSH-ключ...")) }
             runCatching {
+                val account = localStateRepository.upsertAccount(
+                    host = BuildConfig.DEFAULT_SERVER_HOST,
+                    port = BuildConfig.DEFAULT_SERVER_PORT,
+                    username = username,
+                    homeDirectory = null,
+                    hostFingerprint = null,
+                )
+                val keyPair = sshKeyManager.generateKeyPair(
+                    accountId = account.id,
+                    comment = "codex-android@$username",
+                )
                 val bootstrap = remoteSshGateway.bootstrapPasswordAuth(
                     host = BuildConfig.DEFAULT_SERVER_HOST,
                     port = BuildConfig.DEFAULT_SERVER_PORT,
                     username = username,
                     password = password,
+                    publicOpenSsh = keyPair.publicOpenSsh,
                 )
-                val account = localStateRepository.upsertAccount(
+                localStateRepository.upsertAccount(
                     host = BuildConfig.DEFAULT_SERVER_HOST,
                     port = BuildConfig.DEFAULT_SERVER_PORT,
                     username = username,
                     homeDirectory = bootstrap.homeDirectory,
                     hostFingerprint = bootstrap.hostFingerprint,
                 )
-                sshKeyManager.store(account.id, bootstrap.keyPair)
                 _uiState.update {
                     it.copy(
                         accountDraft = AccountDraft(username = username),
                         settings = it.settings.copy(showAccountSheet = false),
                     )
                 }
+                appendDiagnostic("SSH-ключ установлен, home=${bootstrap.homeDirectory ?: "unknown"}")
                 connectAccount(account.id)
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_AUTH, error.message ?: "Ошибка входа"))
                 }
+                appendDiagnostic("Ошибка bootstrap SSH: ${error.message ?: "unknown"}")
                 showMessage(error.message ?: "Не удалось подготовить аккаунт")
             }
         }
@@ -550,6 +567,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         reconnectJob?.cancel()
         val account = localStateRepository.state().value.accounts.firstOrNull { it.id == accountId } ?: return false
         closeRemoteSession()
+        appendDiagnostic("Подключение к ${account.displayName}, restartAppServer=$forceRestartAppServer")
         _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Подключение к ${account.displayName}")) }
         return runCatching {
             val session = remoteSshGateway.openSession(
@@ -584,6 +602,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     openAiAccount = mapAccountStatus(accountStatus, rateLimits = rateLimits),
                 )
             }
+            appendDiagnostic("SSH и Codex app-server подключены для ${account.displayName}")
             refreshDirectory(home)
             syncCodexProfiles(
                 autoSaveCurrent = accountStatus.account?.email != null,
@@ -596,6 +615,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             true
         }.onFailure { error ->
+            appendDiagnostic("Ошибка подключения: ${error.message ?: "unknown"}")
             _uiState.update { state ->
                 state.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_SERVER, error.message))
             }
@@ -658,12 +678,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     is CodexEvent.ConnectionProblem -> {
+                        appendDiagnostic("Проблема соединения Codex: ${event.message}")
                         markThreadsReconnecting()
                         _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.RECONNECTING, event.message), composer = it.composer.copy(isSending = false)) }
                         _uiState.value.selectedAccountId?.let { scheduleReconnect(it, event.message) }
                     }
 
                     is CodexEvent.ConnectionClosed -> {
+                        appendDiagnostic("Соединение Codex закрыто: ${event.reason}")
                         markThreadsReconnecting()
                         _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.RECONNECTING, event.reason), composer = it.composer.copy(isSending = false)) }
                         _uiState.value.selectedAccountId?.let { scheduleReconnect(it, event.reason) }
@@ -1019,7 +1041,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun showMessage(message: String) {
+        appendDiagnostic("Сообщение UI: $message")
         _uiState.update { it.copy(bannerMessage = message) }
+    }
+
+    fun buildDiagnosticLog(): String {
+        val state = _uiState.value
+        return buildString {
+            appendLine("Codex Android diagnostics")
+            appendLine("timestamp=${Instant.now()}")
+            appendLine("app_version=${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            appendLine("device=${Build.MANUFACTURER} ${Build.MODEL}")
+            appendLine("android_api=${Build.VERSION.SDK_INT}")
+            appendLine("server=${BuildConfig.DEFAULT_SERVER_HOST}:${BuildConfig.DEFAULT_SERVER_PORT}")
+            appendLine("selected_account=${state.selectedAccount?.displayName ?: "none"}")
+            appendLine("connection_status=${state.connectionState.status}")
+            appendLine("connection_message=${state.connectionState.message ?: ""}")
+            appendLine("selected_thread_id=${state.selectedThreadId ?: "none"}")
+            appendLine("selected_thread_title=${state.selectedThread?.title ?: "none"}")
+            appendLine("cwd=${state.sidebar.currentDirectory}")
+            appendLine("codex_profile=${state.selectedCodexProfile?.email ?: state.selectedCodexProfile?.name ?: "none"}")
+            appendLine("gpt_auth_mode=${state.openAiAccount.authMode ?: "none"}")
+            appendLine("gpt_email=${state.openAiAccount.email ?: "none"}")
+            appendLine("gpt_plan=${state.openAiAccount.planType ?: "none"}")
+            appendLine("gpt_login_state=${state.openAiAccount.loginState}")
+            appendLine("gpt_last_error=${state.openAiAccount.lastError ?: ""}")
+            appendLine("github_user=${state.gitHubSession?.userLogin ?: "none"}")
+            appendLine()
+            appendLine("recent_events:")
+            diagnosticEntries.ifEmpty {
+                listOf("[${Instant.now()}] Пусто")
+            }.forEach { appendLine(it) }
+        }
+    }
+
+    fun notifyLogsCopied() {
+        showMessage("Логи скопированы")
+    }
+
+    private fun appendDiagnostic(message: String) {
+        val entry = "[${Instant.now()}] $message"
+        while (diagnosticEntries.size >= 80) {
+            diagnosticEntries.removeFirst()
+        }
+        diagnosticEntries.addLast(entry)
     }
 
     private fun resolvePath(raw: String): String {

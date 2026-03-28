@@ -23,15 +23,15 @@ class RemoteSshGateway(
         port: Int,
         username: String,
         password: String,
+        publicOpenSsh: String,
     ): BootstrapResult = withContext(Dispatchers.IO) {
-        val keyPair = keyManager.generateKeyPair(comment = "codex-android@$username")
         val client = AndroidSshClient()
         client.addHostKeyVerifier(PromiscuousVerifier())
         client.connect(host, port)
         try {
             client.authPassword(username, password)
             val homeDir = executeCommand(client, "printf '%s' \"\$HOME\"").trim().ifBlank { null }
-            val escapedKey = shellEscape(keyPair.publicOpenSsh)
+            val escapedKey = shellEscape(publicOpenSsh)
             executeCommand(
                 client,
                 "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && " +
@@ -39,7 +39,6 @@ class RemoteSshGateway(
             )
             BootstrapResult(
                 homeDirectory = homeDir,
-                keyPair = keyPair,
                 hostFingerprint = null,
             )
         } finally {
@@ -53,14 +52,17 @@ class RemoteSshGateway(
         username: String,
         accountId: String,
     ): ManagedRemoteSession = withContext(Dispatchers.IO) {
-        val privateKey = keyManager.loadPrivateKey(accountId)
-            ?: error("Missing SSH key for account $accountId")
-        val publicKey = keyManager.loadPublicKey(accountId)
         val client = AndroidSshClient()
         client.addHostKeyVerifier(PromiscuousVerifier())
         client.connect(host, port)
         try {
-            val keyProvider = client.loadKeys(privateKey, publicKey, null)
+            val keyProvider = keyManager.loadKeyPair(accountId)?.let(client::loadKeys)
+                ?: run {
+                    val privateKey = keyManager.loadPrivateKey(accountId)
+                        ?: error("Missing SSH key for account $accountId")
+                    val publicKey = keyManager.loadPublicKey(accountId)
+                    client.loadKeys(privateKey, publicKey, null)
+                }
             client.authPublickey(username, keyProvider)
             client.setKeepAliveIntervalSeconds(15)
             ManagedRemoteSession(
@@ -95,7 +97,6 @@ class RemoteSshGateway(
 
 data class BootstrapResult(
     val homeDirectory: String?,
-    val keyPair: GeneratedSshKeyPair,
     val hostFingerprint: String?,
 )
 

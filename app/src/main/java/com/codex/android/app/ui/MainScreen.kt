@@ -44,6 +44,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Link
@@ -95,7 +96,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -1030,6 +1033,7 @@ private fun FloatingComposer(
 
 @Composable
 private fun SettingsSheet(state: MainUiState, viewModel: MainViewModel) {
+    val clipboardManager = LocalClipboardManager.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = { viewModel.toggleSettings(false) },
@@ -1167,6 +1171,33 @@ private fun SettingsSheet(state: MainUiState, viewModel: MainViewModel) {
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
+                    }
+                }
+            }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                shape = RoundedCornerShape(28.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("Диагностика", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Скопировать текущие логи подключения и состояния приложения.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FilledTonalButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(viewModel.buildDiagnosticLog()))
+                            viewModel.notifyLogsCopied()
+                        },
+                    ) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Скопировать логи")
                     }
                 }
             }
@@ -1404,6 +1435,7 @@ private fun WelcomeGate(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier,
 ) {
+    val clipboardManager = LocalClipboardManager.current
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -1468,6 +1500,22 @@ private fun WelcomeGate(
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Войти")
+                }
+                if (
+                    state.connectionState.status == ConnectionStatus.FAILED_AUTH ||
+                    state.connectionState.status == ConnectionStatus.FAILED_SERVER
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            clipboardManager.setText(AnnotatedString(viewModel.buildDiagnosticLog()))
+                            viewModel.notifyLogsCopied()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Скопировать лог")
+                    }
                 }
                 if (state.connectionState.status == ConnectionStatus.CONNECTING) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
