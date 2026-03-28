@@ -46,7 +46,7 @@ class RemoteSshGateway(
         }
     }
 
-    suspend fun openSession(
+    internal suspend fun openSession(
         host: String,
         port: Int,
         username: String,
@@ -306,7 +306,7 @@ data class RemoteFileEntry(
     val modifiedEpochSeconds: Long?,
 )
 
-private class AndroidSshClient : SSHClient(DefaultConfig()) {
+internal class AndroidSshClient : SSHClient(DefaultConfig()) {
     fun setKeepAliveIntervalSeconds(seconds: Int) {
         conn.keepAlive.keepAliveInterval = seconds
     }
