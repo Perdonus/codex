@@ -40,17 +40,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     env:
-      SERVER_HOST: ${{ secrets.SERVER_HOST }}
-      SERVER_PORT: ${{ secrets.SERVER_PORT }}
-      SERVER_USER: ${{ secrets.SERVER_USER }}
+      SERVER_HOST: ${{ secrets.SERVER_HOST != '' && secrets.SERVER_HOST || '91.233.168.233' }}
+      SERVER_PORT: ${{ secrets.SERVER_PORT != '' && secrets.SERVER_PORT || '22' }}
+      SERVER_USER: ${{ secrets.SERVER_USER != '' && secrets.SERVER_USER || 'root' }}
       SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
-      SERVER_UPLOAD_PATH: ${{ secrets.SERVER_UPLOAD_PATH }}
+      SERVER_UPLOAD_PATH: ${{ secrets.SERVER_UPLOAD_PATH != '' && secrets.SERVER_UPLOAD_PATH || '/root/codex-app/builds' }}
     steps:
       - name: Check upload configuration
         id: upload_config
         run: |
           set -euo pipefail
-          if [ -n "${SERVER_HOST}" ] && [ -n "${SERVER_USER}" ] && [ -n "${SERVER_SSH_KEY}" ] && [ -n "${SERVER_UPLOAD_PATH}" ]; then
+          if [ -n "${SERVER_SSH_KEY}" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
             echo "server_port=${SERVER_PORT:-22}" >> "$GITHUB_OUTPUT"
           else
@@ -60,7 +60,7 @@ jobs:
 
       - name: Skip upload when server secrets are missing
         if: ${{ steps.upload_config.outputs.enabled != 'true' }}
-        run: echo "Server upload secrets are not configured. APK remains available as a GitHub artifact only."
+        run: echo "SERVER_SSH_KEY is not configured. APK remains available as a GitHub artifact only."
 
       - name: Download built APK
         if: ${{ steps.upload_config.outputs.enabled == 'true' }}
