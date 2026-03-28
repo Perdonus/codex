@@ -63,6 +63,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
     implementation(libs.sshj)
+    implementation(libs.bouncycastle.bcprov)
     implementation(libs.commonmark)
     implementation(libs.slf4j.nop)
 

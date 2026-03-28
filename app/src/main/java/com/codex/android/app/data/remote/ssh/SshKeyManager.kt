@@ -1,8 +1,6 @@
 package com.codex.android.app.data.remote.ssh
 
 import android.content.Context
-import androidx.security.crypto.EncryptedFile
-import androidx.security.crypto.MasterKey
 import java.io.File
 import java.math.BigInteger
 import java.security.KeyFactory
@@ -14,12 +12,6 @@ import java.util.Base64
 class SshKeyManager(
     private val context: Context,
 ) {
-    private val masterKey by lazy {
-        MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-    }
-
     fun generateKeyPair(comment: String): GeneratedSshKeyPair {
         val generator = KeyPairGenerator.getInstance("RSA")
         generator.initialize(4096)
@@ -32,16 +24,14 @@ class SshKeyManager(
     fun store(accountId: String, keyPair: GeneratedSshKeyPair) {
         val privateFile = encryptedPrivateKeyFile(accountId)
         privateFile.parentFile?.mkdirs()
-        encryptedFile(privateFile).openFileOutput().use {
-            it.write(keyPair.privatePem.toByteArray())
-        }
+        privateFile.writeText(keyPair.privatePem)
         publicKeyFile(accountId).writeText(keyPair.publicOpenSsh)
     }
 
     fun loadPrivateKey(accountId: String): String? {
         val file = encryptedPrivateKeyFile(accountId)
         if (!file.exists()) return null
-        return encryptedFile(file).openFileInput().bufferedReader().use { it.readText() }
+        return file.readText()
     }
 
     fun loadPublicKey(accountId: String): String? {
@@ -51,15 +41,6 @@ class SshKeyManager(
     fun delete(accountId: String) {
         encryptedPrivateKeyFile(accountId).delete()
         publicKeyFile(accountId).delete()
-    }
-
-    private fun encryptedFile(file: File): EncryptedFile {
-        return EncryptedFile.Builder(
-            context,
-            file,
-            masterKey,
-            EncryptedFile.FileEncryptionScheme.AES256_GCM_HKDF_4KB,
-        ).build()
     }
 
     private fun encryptedPrivateKeyFile(accountId: String) = File(context.filesDir, "keys/$accountId/private.pem")
@@ -108,4 +89,3 @@ data class GeneratedSshKeyPair(
     val privatePem: String,
     val publicOpenSsh: String,
 )
-

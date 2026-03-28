@@ -6,6 +6,7 @@
 package com.codex.android.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -1396,69 +1398,73 @@ private fun WelcomeGate(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier,
 ) {
-    Box(modifier = modifier) {
-        Column(
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(horizontal = 22.dp),
+    ) {
+        Text(
+            text = "Codex",
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 22.dp)
-                .statusBarsPadding()
-                .navigationBarsPadding(),
+                .align(Alignment.Center)
+                .offset(y = (-116).dp),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Black,
+            color = Color.White,
+            textAlign = TextAlign.Center,
+        )
+        Surface(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .animateContentSize()
+                .padding(bottom = 12.dp),
+            shape = RoundedCornerShape(34.dp),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.9f),
+            shadowElevation = 24.dp,
+            tonalElevation = 8.dp,
         ) {
-            Spacer(Modifier.weight(1f))
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Text("Codex", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
                 Text(
-                    text = "Remote Codex for Android with live streaming, file access and profile switching.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.82f),
-                    textAlign = TextAlign.Center,
+                    text = "Login",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Black,
+                    color = Color.White,
                 )
-            }
-            Spacer(Modifier.weight(1f))
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
-                shape = RoundedCornerShape(34.dp),
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                shadowElevation = 24.dp,
-                tonalElevation = 8.dp,
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 18.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                LabeledField(
+                    label = "Username",
+                    value = state.accountDraft.username,
+                    labelColor = Color.White,
+                    containerColor = Color.White.copy(alpha = 0.14f),
+                    textColor = Color.White,
+                    placeholderColor = Color.White.copy(alpha = 0.72f),
+                    onValueChange = { value -> viewModel.onDraftChanged { it.copy(username = value) } },
+                )
+                LabeledField(
+                    label = "Password",
+                    value = state.accountDraft.password,
+                    password = true,
+                    imeAction = ImeAction.Done,
+                    labelColor = Color.White,
+                    containerColor = Color.White.copy(alpha = 0.14f),
+                    textColor = Color.White,
+                    placeholderColor = Color.White.copy(alpha = 0.72f),
+                    onValueChange = { value -> viewModel.onDraftChanged { it.copy(password = value) } },
+                )
+                Button(
+                    onClick = viewModel::connectDraftAccount,
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Login", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-                    Text(
-                        text = "Server ${BuildConfig.DEFAULT_SERVER_HOST}:${BuildConfig.DEFAULT_SERVER_PORT}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    LabeledField(
-                        label = "Username",
-                        value = state.accountDraft.username,
-                        onValueChange = { value -> viewModel.onDraftChanged { it.copy(username = value) } },
-                    )
-                    LabeledField(
-                        label = "Password",
-                        value = state.accountDraft.password,
-                        password = true,
-                        imeAction = ImeAction.Done,
-                        onValueChange = { value -> viewModel.onDraftChanged { it.copy(password = value) } },
-                    )
-                    Button(
-                        onClick = viewModel::connectDraftAccount,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Войти")
-                    }
-                    if (state.connectionState.status == ConnectionStatus.CONNECTING) {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
+                    Text("Войти")
+                }
+                if (state.connectionState.status == ConnectionStatus.CONNECTING) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
             }
         }
@@ -1606,13 +1612,12 @@ private fun SystemBarScrims() {
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .height(160.dp)
-                .navigationBarsPadding()
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.18f),
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.8f),
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.42f),
                         ),
                     ),
                 ),
@@ -1626,19 +1631,23 @@ private fun LabeledField(
     value: String,
     password: Boolean = false,
     imeAction: ImeAction = ImeAction.Next,
+    labelColor: Color = MaterialTheme.colorScheme.onSurface,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
+    placeholderColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     onValueChange: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, style = MaterialTheme.typography.labelLarge)
+        Text(label, style = MaterialTheme.typography.labelLarge, color = labelColor)
         Surface(
             shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            color = containerColor,
             modifier = Modifier.fillMaxWidth(),
         ) {
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = textColor),
                 keyboardOptions = KeyboardOptions(imeAction = imeAction),
                 keyboardActions = KeyboardActions.Default,
                 visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
@@ -1650,7 +1659,7 @@ private fun LabeledField(
                         Text(
                             text = label,
                             style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = placeholderColor,
                         )
                     }
                     innerTextField()
