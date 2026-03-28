@@ -21,6 +21,7 @@ import com.codex.android.app.core.model.OpenAiLoginState
 import com.codex.android.app.core.model.ReasoningEffort
 import com.codex.android.app.core.model.RemoteFileNode
 import com.codex.android.app.core.model.RemoteGitRepository
+import com.codex.android.app.core.model.SidebarState
 import com.codex.android.app.core.model.ThreadRuntimeStatus
 import com.codex.android.app.core.util.AgentsFileManager
 import com.codex.android.app.data.remote.codex.CodexAppServerClient
@@ -125,11 +126,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 connectAccount(account.id)
-            }.onFailure {
+            }.onFailure { error ->
                 _uiState.update {
-                    it.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_AUTH, it.message ?: "Authentication failed"))
+                    it.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_AUTH, error.message ?: "Authentication failed"))
                 }
-                showMessage(it.message ?: "Account bootstrap failed")
+                showMessage(error.message ?: "Account bootstrap failed")
             }
         }
     }
@@ -252,14 +253,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         lastKnownTurnId = turnId,
                     )
                 }
-            }.onFailure {
+            }.onFailure { error ->
                 _uiState.update {
                     it.copy(
                         composer = it.composer.copy(text = content, isSending = false),
-                        connectionState = ConnectionState(ConnectionStatus.FAILED_SERVER, it.message),
+                        connectionState = ConnectionState(ConnectionStatus.FAILED_SERVER, error.message),
                     )
                 }
-                showMessage(it.message ?: "Unable to send message")
+                showMessage(error.message ?: "Unable to send message")
             }
         }
     }
@@ -279,7 +280,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val accountId = _uiState.value.selectedAccountId ?: return@launch
             localStateRepository.updateBinding(threadId) { current ->
-                val now = Instant.now().epochMilli()
+                val now = Instant.now().toEpochMilli()
                 val existing = current ?: ConversationBinding(threadId = threadId, accountId = accountId)
                 existing.copy(
                     isPinned = !existing.isPinned,

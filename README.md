@@ -20,13 +20,14 @@ This repo is intentionally set up for **GitHub-only builds**.
 - Use GitHub Actions for CI and release artifacts.
 - The expected remote is `git@github.com:Perdonus/codex.git`.
 
-## Required secret
+## CI secrets
 
 Set these GitHub Actions secrets:
 
 - `GITHUB_DEVICE_CLIENT_ID` for the in-app GitHub OAuth device flow.
-- `SERVER_SSH_KEY` so GitHub Actions can upload the built APK back to the Linux server after CI succeeds.
-- Optional overrides: `SERVER_HOST`, `SERVER_PORT`, `SERVER_USER`, `SERVER_UPLOAD_PATH`. By default the workflow uploads to `root@91.233.168.233:22` into `/root/codex-app/builds`.
+- `SERVER_HOST`, `SERVER_USER`, `SERVER_SSH_KEY`, `SERVER_UPLOAD_PATH` so GitHub Actions can upload the built APK back to the Linux server after CI succeeds.
+- `SERVER_PORT` is optional and defaults to `22`.
+- If the SSH upload secrets are incomplete, the workflow still publishes the debug APK as a GitHub artifact and skips the server upload job.
 
 ## Notes
 
