@@ -43,14 +43,34 @@ jobs:
       - name: Surface Gradle failure details
         if: failure()
         run: |
-          echo "Gradle build failed. Tail of gradle-build.log:"
-          tail -n 120 gradle-build.log || true
-          while IFS= read -r line; do
-            escaped="${line//'%'/'%25'}"
-            escaped="${escaped//$'\n'/'%0A'}"
-            escaped="${escaped//$'\r'/'%0D'}"
-            echo "::error::$escaped"
-          done < <(tail -n 40 gradle-build.log || true)
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          log_path = Path("gradle-build.log")
+          lines = log_path.read_text(errors="replace").splitlines() if log_path.exists() else []
+          patterns = [
+              re.compile(r"(^e: )"),
+              re.compile(r"(^.* error: )"),
+              re.compile(r"(^FAILURE: )"),
+              re.compile(r"(^\* What went wrong:)"),
+              re.compile(r"(Execution failed|Could not resolve|Could not find|Unresolved reference|Compilation error|Exception is:)"),
+          ]
+
+          matches = []
+          for line in lines:
+              if any(pattern.search(line) for pattern in patterns):
+                  stripped = line.strip()
+                  if stripped:
+                      matches.append(stripped)
+
+          snippet = matches[-25:] if matches else lines[-80:]
+          summary = "\n".join(snippet).strip() or "Gradle build failed without a captured summary."
+          print("Gradle build failure summary:")
+          print(summary)
+          escaped = summary.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Gradle assembleDebug failed::{escaped}")
+          PY
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
