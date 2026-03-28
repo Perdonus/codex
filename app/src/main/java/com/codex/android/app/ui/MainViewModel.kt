@@ -372,16 +372,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     startOpenAiPolling(session.loginId)
                 }
-                .onFailure {
+                .onFailure { error ->
                     _uiState.update { state ->
                         state.copy(
                             openAiAccount = state.openAiAccount.copy(
                                 loginState = OpenAiLoginState.ERROR,
-                                lastError = it.message ?: "Unable to start ChatGPT login",
+                                lastError = error.message ?: "Unable to start ChatGPT login",
                             ),
                         )
                     }
-                    showMessage(it.message ?: "GPT login start failed")
+                    showMessage(error.message ?: "GPT login start failed")
                 }
         }
     }
@@ -551,9 +551,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value.threads.firstOrNull()?.threadId?.let(::selectThread)
             }
             true
-        }.onFailure {
+        }.onFailure { error ->
             _uiState.update { state ->
-                state.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_SERVER, it.message))
+                state.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_SERVER, error.message))
             }
         }.getOrDefault(false)
     }
@@ -832,13 +832,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     openAiPollingJob?.cancel()
                 }
             }
-            .onFailure {
+            .onFailure { error ->
                 _uiState.update { state ->
                     state.copy(
                         openAiAccount = state.openAiAccount.copy(
                             isLoading = false,
                             loginState = OpenAiLoginState.ERROR,
-                            lastError = it.message ?: "Unable to refresh GPT account",
+                            lastError = error.message ?: "Unable to refresh GPT account",
                         ),
                     )
                 }
