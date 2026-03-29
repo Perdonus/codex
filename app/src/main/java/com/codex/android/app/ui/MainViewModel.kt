@@ -39,6 +39,7 @@ import com.codex.android.app.data.remote.ssh.PortForwardHandle
 import java.io.File
 import java.time.Instant
 import kotlin.math.abs
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +48,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val container = (application as CodexMobileApp).container
@@ -128,10 +130,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     homeDirectory = null,
                     hostFingerprint = null,
                 )
-                val keyPair = sshKeyManager.generateKeyPair(
-                    accountId = account.id,
-                    comment = "codex-android@$username",
-                )
+                val keyPair = withContext(Dispatchers.Default) {
+                    sshKeyManager.generateKeyPair(
+                        accountId = account.id,
+                        comment = "codex-android@$username",
+                    )
+                }
                 appendDiagnostic("SSH-ключ для аккаунта сгенерирован")
                 val bootstrap = remoteSshGateway.bootstrapPasswordAuth(
                     host = BuildConfig.DEFAULT_SERVER_HOST,
@@ -154,7 +158,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 appendDiagnostic("SSH-ключ установлен, home=${bootstrap.homeDirectory ?: "unknown"}")
-                connectAccount(account.id)
+                connectAccount(account.id, bootstrapPassword = password)
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_AUTH, error.message ?: "Ошибка входа"))
@@ -184,7 +188,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             runCatching {
                 session.activateCodexProfile(profileName)
-                connectAccount(account.id, forceRestartAppServer = true)
+                connectAccount(account.id, forceRestartAppServer = true, bootstrapPassword = null)
             }.onFailure {
                 showMessage(it.message ?: "Не удалось переключить аккаунт Codex")
             }
@@ -359,6 +363,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update {
                     it.copy(sidebar = SidebarState(currentDirectory = resolved, remoteFiles = nodes, currentThreadId = it.selectedThreadId))
                 }
+                syncFromLocalState()
+                refreshThreads()
             }.onFailure {
                 showMessage(it.message ?: "Не удалось открыть папку")
             }
@@ -380,6 +386,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { session.downloadToLocal(resolved, target) }
                 .onSuccess { showMessage("Сохранено: ${it.absolutePath}") }
                 .onFailure { showMessage(it.message ?: "Не удалось скачать файл") }
+        }
+    }
+
+    fun renameOrMoveRemotePath(oldPath: String, targetInput: String) {
+        viewModelScope.launch {
+            val session = remoteSession ?: return@launch
+            val source = resolvePath(oldPath)
+            val target = buildMoveTargetPath(source, targetInput)
+            runCatching { session.rename(source, target) }
+                .onSuccess {
+                    refreshDirectory(parentDirectoryOf(target))
+                    showMessage("Перемещено: $target")
+                }
+                .onFailure { showMessage(it.message ?: "Не удалось переместить файл") }
+        }
+    }
+
+    fun deleteRemotePath(path: String, isDirectory: Boolean) {
+        viewModelScope.launch {
+            val session = remoteSession ?: return@launch
+            val resolved = resolvePath(path)
+            runCatching { session.delete(resolved, isDirectory) }
+                .onSuccess {
+                    refreshDirectory(parentDirectoryOf(resolved))
+                    showMessage("Удалено: ${resolved.substringAfterLast('/')}")
+                }
+                .onFailure { showMessage(it.message ?: "Не удалось удалить файл") }
+        }
+    }
+
+    fun createDirectoryInCurrentPath(name: String) {
+        viewModelScope.launch {
+            val session = remoteSession ?: return@launch
+            val target = resolvePath(name)
+            runCatching { session.makeDirectory(target) }
+                .onSuccess {
+                    refreshDirectory(parentDirectoryOf(target))
+                    showMessage("Папка создана: ${target.substringAfterLast('/')}")
+                }
+                .onFailure { showMessage(it.message ?: "Не удалось создать папку") }
         }
     }
 
@@ -563,10 +609,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun connectAccount(accountId: String): Boolean {
-        return connectAccount(accountId = accountId, forceRestartAppServer = false)
+        return connectAccount(accountId = accountId, forceRestartAppServer = false, bootstrapPassword = null)
     }
 
-    private suspend fun connectAccount(accountId: String, forceRestartAppServer: Boolean): Boolean {
+    private suspend fun connectAccount(accountId: String, forceRestartAppServer: Boolean, bootstrapPassword: String?): Boolean {
         reconnectJob?.cancel()
         val account = localStateRepository.state().value.accounts.firstOrNull { it.id == accountId } ?: return false
         closeRemoteSession()
@@ -578,6 +624,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 port = account.port,
                 username = account.username,
                 accountId = account.id,
+                password = bootstrapPassword,
             )
             remoteSession = session
             val home = session.detectHomeDirectory()
@@ -724,8 +771,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val existing = _uiState.value.selectedThreadId
         if (existing != null) return existing
         val account = _uiState.value.selectedAccount ?: return null
-        val cwd = resolvePath(_uiState.value.sidebar.currentDirectory.takeIf { it.isNotBlank() } ?: account.homeDirectory ?: "~")
-        val seedBinding = ConversationBinding(threadId = "pending", accountId = account.id, cwdOverride = cwd)
+        val baseDirectory = resolvePath(_uiState.value.sidebar.currentDirectory.takeIf { it.isNotBlank() } ?: account.homeDirectory ?: "~")
+        val cwd = remoteSession?.createConversationDirectory(baseDirectory) ?: baseDirectory
+        val seedBinding = ConversationBinding(
+            threadId = "pending",
+            accountId = account.id,
+            directoryScope = baseDirectory,
+            cwdOverride = cwd,
+        )
         val snapshot = codexClient?.startThread(
             cwd = cwd,
             model = _uiState.value.composer.selectedModel,
@@ -734,6 +787,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val binding = ConversationBinding(
             threadId = snapshot.threadId,
             accountId = account.id,
+            directoryScope = baseDirectory,
             cwdOverride = snapshot.cwd,
         )
         localStateRepository.upsertBinding(binding)
@@ -752,7 +806,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun ensureBinding(threadId: String, accountId: String): ConversationBinding {
         val existing = localStateRepository.state().value.conversationBindings.firstOrNull { it.threadId == threadId }
         if (existing != null) return existing
-        val created = ConversationBinding(threadId = threadId, accountId = accountId, cwdOverride = _uiState.value.selectedThread?.cwd)
+        val cwd = _uiState.value.selectedThread?.cwd
+        val created = ConversationBinding(
+            threadId = threadId,
+            accountId = accountId,
+            directoryScope = cwd?.let(::parentDirectoryOf) ?: _uiState.value.sidebar.currentDirectory,
+            cwdOverride = cwd,
+        )
         localStateRepository.upsertBinding(created)
         return created
     }
@@ -972,8 +1032,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun syncFromLocalState() {
         val persisted = localStateRepository.state().value
         val selectedAccountId = persisted.selectedAccountId
+        val currentDirectory = _uiState.value.sidebar.currentDirectory
         val threads = persisted.cachedThreads
             .filter { it.accountId == selectedAccountId }
+            .filter { thread -> threadMatchesDirectory(thread, bindingFor(thread.threadId, persisted), currentDirectory) }
             .sortedWith(compareByDescending<CachedThread> { bindingFor(it.threadId, persisted)?.isPinned == true }
                 .thenByDescending { bindingFor(it.threadId, persisted)?.pinnedOrder ?: 0L }
                 .thenByDescending { it.updatedAtEpochSeconds })
@@ -1043,6 +1105,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return persisted.conversationBindings.firstOrNull { it.threadId == threadId }
     }
 
+    private fun threadMatchesDirectory(thread: CachedThread, binding: ConversationBinding?, currentDirectory: String): Boolean {
+        if (currentDirectory.isBlank()) return true
+        val normalizedCurrent = currentDirectory.removeSuffix("/")
+        val scope = binding?.directoryScope?.removeSuffix("/")
+        val threadCwd = thread.cwd.removeSuffix("/")
+        return scope == normalizedCurrent || threadCwd == normalizedCurrent
+    }
+
     private fun showMessage(message: String) {
         appendDiagnostic("Сообщение UI: $message")
         _uiState.update { it.copy(bannerMessage = message) }
@@ -1100,6 +1170,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (trimmed.startsWith("/")) return trimmed
         val base = _uiState.value.sidebar.currentDirectory.ifBlank { _uiState.value.selectedThread?.cwd ?: "~" }
         return if (base.endsWith("/")) "$base$trimmed" else "$base/$trimmed"
+    }
+
+    private fun buildMoveTargetPath(sourcePath: String, rawTarget: String): String {
+        val trimmed = rawTarget.trim()
+        if (trimmed.isBlank()) return sourcePath
+        return when {
+            trimmed.startsWith("/") || trimmed.startsWith("~/") || trimmed == "~" -> resolvePath(trimmed)
+            trimmed.contains("/") -> resolvePath(trimmed)
+            else -> {
+                val parent = parentDirectoryOf(sourcePath)
+                if (parent.endsWith("/")) "$parent$trimmed" else "$parent/$trimmed"
+            }
+        }
+    }
+
+    private fun parentDirectoryOf(path: String): String {
+        val normalized = path.trim().trimEnd('/').ifBlank { "/" }
+        if (normalized == "/" || normalized == "~") return normalized
+        val parent = normalized.substringBeforeLast('/', missingDelimiterValue = normalized)
+        return parent.ifBlank { "/" }
     }
 
     private fun chooseDefaultModel(models: List<ModelOption>, existing: String?): String? {

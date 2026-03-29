@@ -54,6 +54,7 @@ import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -72,6 +73,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedIconButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -596,6 +598,12 @@ private fun FileSection(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier,
 ) {
+    var actionNode by remember { mutableStateOf<RemoteFileNode?>(null) }
+    var moveNode by remember { mutableStateOf<RemoteFileNode?>(null) }
+    var moveTarget by remember { mutableStateOf("") }
+    var showCreateFolderDialog by remember { mutableStateOf(false) }
+    var newFolderName by remember { mutableStateOf("") }
+
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
@@ -622,8 +630,18 @@ private fun FileSection(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                OutlinedIconButton(onClick = { viewModel.refreshDirectory() }) {
-                    Icon(Icons.Rounded.Refresh, contentDescription = "Обновить файлы")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedIconButton(
+                        onClick = {
+                            newFolderName = ""
+                            showCreateFolderDialog = true
+                        },
+                    ) {
+                        Icon(Icons.Rounded.Add, contentDescription = "Создать папку")
+                    }
+                    OutlinedIconButton(onClick = { viewModel.refreshDirectory() }) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = "Обновить файлы")
+                    }
                 }
             }
             val parentDirectory = remember(state.sidebar.currentDirectory) { parentDirectoryOf(state.sidebar.currentDirectory) }
@@ -636,6 +654,7 @@ private fun FileSection(
                         FileNodeCard(
                             node = RemoteFileNode(path = parent, name = "..", isDirectory = true),
                             onOpen = { viewModel.enterDirectory(parent) },
+                            onLongPress = null,
                         )
                     }
                 }
@@ -649,10 +668,85 @@ private fun FileSection(
                                 viewModel.downloadRemotePath(node.path)
                             }
                         },
+                        onLongPress = {
+                            actionNode = node
+                        },
                     )
                 }
             }
         }
+    }
+
+    if (showCreateFolderDialog) {
+        PathPromptDialog(
+            title = "Новая папка",
+            value = newFolderName,
+            onValueChange = { newFolderName = it },
+            confirmLabel = "Создать",
+            supportingText = "Папка будет создана в текущей директории.",
+            onDismiss = { showCreateFolderDialog = false },
+            onConfirm = {
+                viewModel.createDirectoryInCurrentPath(newFolderName)
+                showCreateFolderDialog = false
+            },
+        )
+    }
+
+    actionNode?.let { node ->
+        AlertDialog(
+            onDismissRequest = { actionNode = null },
+            title = { Text(node.name) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(
+                        onClick = {
+                            viewModel.downloadRemotePath(node.path)
+                            actionNode = null
+                        },
+                    ) {
+                        Text("Скачать")
+                    }
+                    TextButton(
+                        onClick = {
+                            moveNode = node
+                            moveTarget = node.path
+                            actionNode = null
+                        },
+                    ) {
+                        Text("Переместить / переименовать")
+                    }
+                    TextButton(
+                        onClick = {
+                            viewModel.deleteRemotePath(node.path, node.isDirectory)
+                            actionNode = null
+                        },
+                    ) {
+                        Text("Удалить")
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { actionNode = null }) {
+                    Text("Закрыть")
+                }
+            },
+        )
+    }
+
+    moveNode?.let { node ->
+        PathPromptDialog(
+            title = "Переместить / переименовать",
+            value = moveTarget,
+            onValueChange = { moveTarget = it },
+            confirmLabel = "Применить",
+            supportingText = "Можно ввести новое имя или полный путь.",
+            onDismiss = { moveNode = null },
+            onConfirm = {
+                viewModel.renameOrMoveRemotePath(node.path, moveTarget)
+                moveNode = null
+            },
+        )
     }
 }
 
@@ -660,11 +754,15 @@ private fun FileSection(
 private fun FileNodeCard(
     node: RemoteFileNode,
     onOpen: () -> Unit,
+    onLongPress: (() -> Unit)?,
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onOpen),
+            .combinedClickable(
+                onClick = onOpen,
+                onLongClick = onLongPress,
+            ),
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surface,
     ) {
@@ -690,6 +788,50 @@ private fun FileNodeCard(
             }
         }
     }
+}
+
+@Composable
+private fun PathPromptDialog(
+    title: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    confirmLabel: String,
+    supportingText: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    supportingText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = value.trim().isNotBlank(),
+            ) {
+                Text(confirmLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Отмена")
+            }
+        },
+    )
 }
 
 @Composable

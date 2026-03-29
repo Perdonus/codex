@@ -97,13 +97,14 @@ class SshKeyManager(
             bytes.forEach(buffer::add)
         }
         writeBytes("ssh-rsa".toByteArray())
-        writeBytes(stripLeadingZero(exponent.toByteArray()))
-        writeBytes(stripLeadingZero(modulus.toByteArray()))
+        writeBytes(sshMpInt(exponent))
+        writeBytes(sshMpInt(modulus))
         return buffer.toByteArray()
     }
 
-    private fun stripLeadingZero(bytes: ByteArray): ByteArray {
-        return if (bytes.size > 1 && bytes.first() == 0.toByte()) bytes.copyOfRange(1, bytes.size) else bytes
+    private fun sshMpInt(value: BigInteger): ByteArray {
+        // BigInteger already preserves the leading zero byte when SSH mpint needs it.
+        return value.toByteArray()
     }
 
     private fun loadAndroidKeyStore(): KeyStore {

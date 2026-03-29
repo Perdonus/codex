@@ -47,6 +47,7 @@ data class GitHubRepo(
 data class ConversationBinding(
     val threadId: String,
     val accountId: String,
+    val directoryScope: String? = null,
     val isPinned: Boolean = false,
     val pinnedOrder: Long? = null,
     val pinnedRepoUrl: String? = null,

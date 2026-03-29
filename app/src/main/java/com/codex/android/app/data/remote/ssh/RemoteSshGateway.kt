@@ -56,19 +56,25 @@ class RemoteSshGateway(
         port: Int,
         username: String,
         accountId: String,
+        password: String? = null,
     ): ManagedRemoteSession = withContext(Dispatchers.IO) {
         val client = AndroidSshClient()
         client.addHostKeyVerifier(PromiscuousVerifier())
         client.connect(host, port)
         try {
-            val keyProvider = keyManager.loadKeyPair(accountId)?.let(client::loadKeys)
-                ?: run {
-                    val privateKey = keyManager.loadPrivateKey(accountId)
-                        ?: error("Missing SSH key for account $accountId")
-                    val publicKey = keyManager.loadPublicKey(accountId)
-                    client.loadKeys(privateKey, publicKey, null)
-                }
-            client.authPublickey(username, keyProvider)
+            runCatching {
+                val keyProvider = keyManager.loadKeyPair(accountId)?.let(client::loadKeys)
+                    ?: run {
+                        val privateKey = keyManager.loadPrivateKey(accountId)
+                            ?: error("Missing SSH key for account $accountId")
+                        val publicKey = keyManager.loadPublicKey(accountId)
+                        client.loadKeys(privateKey, publicKey, null)
+                    }
+                client.authPublickey(username, keyProvider)
+            }.getOrElse { authError ->
+                if (password.isNullOrBlank()) throw authError
+                client.authPassword(username, password)
+            }
             client.setKeepAliveIntervalSeconds(15)
             ManagedRemoteSession(
                 context = context,
@@ -135,7 +141,7 @@ internal class ManagedRemoteSession(
                   kill "${'$'}pid" 2>/dev/null || true
                 done
               fi
-              pkill -f "codex app-server --listen ws://127.0.0.1:${'$'}PORT" 2>/dev/null || true
+              pkill -f "codex --search --sandbox danger-full-access --ask-for-approval never --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127.0.0.1:${'$'}PORT" 2>/dev/null || true
               sleep 1
             fi
             if ! command -v codex >/dev/null 2>&1; then
@@ -143,7 +149,7 @@ internal class ManagedRemoteSession(
               exit 127
             fi
             if ! port_listening; then
-              nohup sh -lc 'codex app-server --listen ws://127.0.0.1:'"${'$'}PORT"' > "'"${'$'}HOME"'/.codex-android-app-server-'"${'$'}PORT"'.log" 2>&1' >/dev/null 2>&1 &
+              nohup sh -lc 'codex --search --sandbox danger-full-access --ask-for-approval never --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127.0.0.1:'"${'$'}PORT"' > "'"${'$'}HOME"'/.codex-android-app-server-'"${'$'}PORT"'.log" 2>&1' >/dev/null 2>&1 &
               sleep 2
             fi
             if ! port_listening; then
@@ -286,29 +292,64 @@ internal class ManagedRemoteSession(
     ): List<CodexProfile> = withContext(Dispatchers.IO) {
         val output = executeShell(
             """
-            mkdir -p "${'$'}HOME/.codex/profiles"
-            AUTH="${'$'}HOME/.codex/auth.json"
-            for profile in "${'$'}HOME"/.codex/profiles/*.json; do
-              [ -e "${'$'}profile" ] || continue
-              name="$(basename "${'$'}profile" .json)"
-              active=0
-              if [ -f "${'$'}AUTH" ] && cmp -s "${'$'}profile" "${'$'}AUTH"; then
-                active=1
-              fi
-              printf '%s\t%s\n' "${'$'}name" "${'$'}active"
-            done
+            python3 - <<'PY'
+            import filecmp, json
+            from pathlib import Path
+
+            home = Path.home()
+            profiles_dir = home / ".codex" / "profiles"
+            profiles_dir.mkdir(parents=True, exist_ok=True)
+            auth_path = home / ".codex" / "auth.json"
+
+            def walk(value):
+                if isinstance(value, dict):
+                    for item in value.values():
+                        yield from walk(item)
+                elif isinstance(value, list):
+                    for item in value:
+                        yield from walk(item)
+                else:
+                    yield value
+
+            def guess_email(data, fallback):
+                for value in walk(data):
+                    if isinstance(value, str) and "@" in value and "." in value.split("@")[-1]:
+                        return value
+                return fallback if "@" in fallback else ""
+
+            def guess_plan(data):
+                for value in walk(data):
+                    if isinstance(value, str):
+                        lower = value.lower()
+                        if any(token in lower for token in ("plus", "pro", "team", "enterprise", "free")):
+                            return value
+                return ""
+
+            for profile in sorted(profiles_dir.glob("*.json")):
+                name = profile.stem
+                active = int(auth_path.exists() and filecmp.cmp(profile, auth_path, shallow=False))
+                email = ""
+                plan = ""
+                try:
+                    payload = json.loads(profile.read_text())
+                    email = guess_email(payload, name)
+                    plan = guess_plan(payload)
+                except Exception:
+                    email = name if "@" in name else ""
+                print(f"{name}\t{active}\t{email}\t{plan}")
+            PY
             """.trimIndent(),
         )
         output.lineSequence()
             .filter { it.isNotBlank() && it.contains('\t') }
             .map { line ->
-                val parts = line.split('\t', limit = 2)
+                val parts = line.split('\t', limit = 4)
                 val isActive = parts.getOrNull(1) == "1"
                 CodexProfile(
                     name = parts[0],
                     isActive = isActive,
-                    email = activeEmail.takeIf { isActive },
-                    planType = activePlanType.takeIf { isActive },
+                    email = (if (isActive) activeEmail else parts.getOrNull(2)).takeUnless { it.isNullOrBlank() },
+                    planType = (if (isActive) activePlanType else parts.getOrNull(3)).takeUnless { it.isNullOrBlank() },
                 )
             }
             .sortedWith(compareByDescending<CodexProfile> { it.isActive }.thenBy { it.name.lowercase() })
@@ -360,6 +401,22 @@ internal class ManagedRemoteSession(
         if (output == "__PROFILE_MISSING__") {
             throw IOException("Codex profile $safeName was not found on the remote server")
         }
+    }
+
+    suspend fun createConversationDirectory(basePath: String): String = withContext(Dispatchers.IO) {
+        executeShell(
+            """
+            BASE=${shellEscape(basePath)}
+            mkdir -p "${'$'}BASE"
+            if command -v mktemp >/dev/null 2>&1; then
+              DIR="$(mktemp -d "${'$'}BASE/codex-XXXXXX")"
+            else
+              DIR="${'$'}BASE/codex-$(date +%s)-${'$'}RANDOM"
+              mkdir -p "${'$'}DIR"
+            fi
+            printf '%s' "${'$'}DIR"
+            """.trimIndent(),
+        ).trim()
     }
 
     fun appServerPortFor(username: String): Int {
