@@ -122,7 +122,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appendDiagnostic("Старт входа по SSH для $username")
             appendDiagnostic("SSH provider: ${SecurityProviderCompat.currentSshProviderName()}")
             _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Устанавливаю SSH-ключ...")) }
-            runCatching {
+            runCatching<Unit> {
                 val account = localStateRepository.upsertAccount(
                     host = BuildConfig.DEFAULT_SERVER_HOST,
                     port = BuildConfig.DEFAULT_SERVER_PORT,
@@ -158,7 +158,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 appendDiagnostic("SSH-ключ установлен, home=${bootstrap.homeDirectory ?: "unknown"}")
-                connectAccount(account.id, bootstrapPassword = password)
+                val connected = connectAccount(
+                    accountId = account.id,
+                    forceRestartAppServer = false,
+                    bootstrapPassword = password,
+                )
+                check(connected) {
+                    _uiState.value.connectionState.message ?: "Не удалось подключиться к серверу"
+                }
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_AUTH, error.message ?: "Ошибка входа"))
