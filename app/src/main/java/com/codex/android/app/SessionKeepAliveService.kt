@@ -9,8 +9,8 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import androidx.core.app.ContextCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.codex.android.app.core.util.AppDiagnostics
 
 class SessionKeepAliveService : Service() {
