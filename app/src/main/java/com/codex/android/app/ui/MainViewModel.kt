@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.codex.android.app.BuildConfig
 import com.codex.android.app.CodexMobileApp
+import com.codex.android.app.SessionKeepAliveService
 import com.codex.android.app.core.model.AccountDraft
 import com.codex.android.app.core.model.CachedThread
 import com.codex.android.app.core.model.ChatMessage
@@ -30,6 +31,7 @@ import com.codex.android.app.core.model.RemoteGitRepository
 import com.codex.android.app.core.model.SidebarState
 import com.codex.android.app.core.model.ThreadRuntimeStatus
 import com.codex.android.app.core.util.AgentsFileManager
+import com.codex.android.app.core.util.AppDiagnostics
 import com.codex.android.app.core.util.SecurityProviderCompat
 import com.codex.android.app.data.remote.codex.CodexAppServerClient
 import com.codex.android.app.data.remote.codex.CodexAccountStatus
@@ -48,6 +50,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -71,11 +75,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var codexEventsJob: Job? = null
     private var reconnectJob: Job? = null
     private var connectionJob: Job? = null
+    private var keepAliveJob: Job? = null
     private var openAiPollingJob: Job? = null
     private val diagnosticEntries = ArrayDeque<String>()
     private val connectionMutex = Mutex()
     private var connectionGeneration = 0L
     private var lastAutoSavedCodexProfileEmail: String? = null
+    private var keepAliveHeartbeatCount = 0L
+    private var lastKeepAliveSuccessAt: Instant? = null
 
     init {
         viewModelScope.launch {
@@ -94,6 +101,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             localStateRepository.state().collectLatest {
                 syncFromLocalState()
             }
+        }
+        viewModelScope.launch {
+            uiState
+                .map { state ->
+                    KeepAliveDescriptor(
+                        active = state.connectionState.status in setOf(
+                            ConnectionStatus.CONNECTING,
+                            ConnectionStatus.CONNECTED,
+                            ConnectionStatus.RECONNECTING,
+                        ) || state.openAiAccount.loginState == OpenAiLoginState.WAITING_BROWSER_AUTH,
+                        title = state.selectedAccount?.displayName ?: "Codex Android",
+                        message = keepAliveMessage(state),
+                    )
+                }
+                .distinctUntilChanged()
+                .collectLatest { descriptor ->
+                    SessionKeepAliveService.sync(
+                        context = getApplication(),
+                        active = descriptor.active,
+                        title = descriptor.title,
+                        message = descriptor.message,
+                    )
+                }
         }
     }
 
@@ -227,6 +257,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             cancelReconnectLoop()
             val account = _uiState.value.selectedAccount ?: return@task
             val session = remoteSession ?: return@task
+            appendDiagnostic("Переключение Codex-профиля: $profileName")
+            AppDiagnostics.log("Переключение Codex-профиля: $profileName")
             _uiState.update {
                 it.copy(
                     connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Переключаю аккаунт Codex..."),
@@ -239,6 +271,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }.onFailure {
                 if (it.isBenignCancellation()) return@onFailure
                 showMessage(it.message ?: "Не удалось переключить аккаунт Codex")
+            }.onSuccess {
+                appendDiagnostic("Codex-профиль активирован: $profileName")
+                AppDiagnostics.log("Codex-профиль активирован: $profileName")
             }
         }
     }
@@ -664,11 +699,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         connectionJob?.cancel()
         reconnectJob?.cancel()
+        keepAliveJob?.cancel()
         codexEventsJob?.cancel()
         openAiPollingJob?.cancel()
         runCatching { portForwardHandle?.close() }
         runCatching { remoteSession?.close() }
         codexClient = null
+        SessionKeepAliveService.sync(getApplication(), active = false, title = "Codex Android", message = "Остановлено")
         super.onCleared()
     }
 
@@ -731,6 +768,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             appendDiagnostic("SSH и Codex app-server подключены для ${account.displayName}")
+            AppDiagnostics.log("Подключение установлено для ${account.displayName}")
+            startKeepAliveLoop(account.id)
             refreshDirectory(home, refreshThreads = false)
             syncCodexProfiles(
                 autoSaveCurrent = accountStatus.account?.email != null,
@@ -1023,6 +1062,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (cancelReconnect) {
             cancelReconnectLoop()
         }
+        keepAliveJob?.cancel()
+        keepAliveJob = null
         codexEventsJob?.cancel()
         openAiPollingJob?.cancel()
         runCatching { codexClient?.close() }
@@ -1205,15 +1246,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.update {
                 it.copy(
                     codexProfiles = profiles
-                        .groupBy { (it.email ?: it.name).lowercase() }
-                        .values
-                        .map { group ->
-                            group.sortedWith(
-                                compareByDescending<CodexProfile> { it.isActive }
-                                    .thenBy { it.name.contains("-") }
-                                    .thenBy { it.name.length },
-                            ).first()
-                        }
                         .sortedWith(compareByDescending<CodexProfile> { it.isActive }.thenBy { it.name.lowercase() })
                         .map { profile ->
                             if (profile.isActive) {
@@ -1246,6 +1278,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return scope == normalizedCurrent || threadCwd == normalizedCurrent
     }
 
+    private fun startKeepAliveLoop(accountId: String) {
+        keepAliveJob?.cancel()
+        keepAliveJob = viewModelScope.launch {
+            appendDiagnostic("KeepAlive heartbeat запущен для $accountId")
+            AppDiagnostics.log("KeepAlive heartbeat запущен")
+            while (isActive) {
+                delay(20_000L)
+                val client = codexClient ?: break
+                if (_uiState.value.connectionState.status !in setOf(ConnectionStatus.CONNECTED, ConnectionStatus.RECONNECTING)) {
+                    continue
+                }
+                runCatching {
+                    client.getAccount(refreshToken = false)
+                }.onSuccess {
+                    keepAliveHeartbeatCount += 1
+                    lastKeepAliveSuccessAt = Instant.now()
+                    if (keepAliveHeartbeatCount % 3L == 0L) {
+                        appendDiagnostic("KeepAlive heartbeat ok #$keepAliveHeartbeatCount")
+                    }
+                }.onFailure { error ->
+                    appendDiagnostic("KeepAlive heartbeat ошибка: ${error.message ?: "unknown"}")
+                    AppDiagnostics.log("KeepAlive heartbeat ошибка: ${error.message ?: "unknown"}")
+                    handleConnectionFailure(error)
+                    return@launch
+                }
+            }
+            appendDiagnostic("KeepAlive heartbeat остановлен")
+            AppDiagnostics.log("KeepAlive heartbeat остановлен")
+        }
+    }
+
     private fun cancelReconnectLoop() {
         reconnectJob?.cancel()
         reconnectJob = null
@@ -1259,6 +1322,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         appendDiagnostic("Проблема соединения Codex: $message")
+        AppDiagnostics.log("Проблема соединения Codex: $message")
         markThreadsReconnecting()
         _uiState.update {
             it.copy(
@@ -1287,6 +1351,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun showMessage(message: String) {
         appendDiagnostic("Сообщение UI: $message")
+        AppDiagnostics.log("UI message: $message")
         _uiState.update { it.copy(bannerMessage = message) }
     }
 
@@ -1313,9 +1378,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appendLine("gpt_login_state=${state.openAiAccount.loginState}")
             appendLine("gpt_last_error=${state.openAiAccount.lastError ?: ""}")
             appendLine("github_user=${state.gitHubSession?.userLogin ?: "none"}")
+            appendLine("reconnect_active=${reconnectJob?.isActive == true}")
+            appendLine("connection_job_active=${connectionJob?.isActive == true}")
+            appendLine("keepalive_active=${keepAliveJob?.isActive == true}")
+            appendLine("keepalive_heartbeats=$keepAliveHeartbeatCount")
+            appendLine("keepalive_last_success=${lastKeepAliveSuccessAt ?: "none"}")
+            appendLine("connection_generation=$connectionGeneration")
+            appendLine("remote_session_open=${remoteSession != null}")
+            appendLine("port_forward_open=${portForwardHandle != null}")
+            appendLine("codex_client_open=${codexClient != null}")
+            appendLine("accounts_count=${state.accounts.size}")
+            appendLine("codex_profiles_count=${state.codexProfiles.size}")
+            appendLine("threads_count=${state.threads.size}")
             appendLine()
             appendLine("recent_events:")
             diagnosticEntries.ifEmpty {
+                listOf("[${Instant.now()}] Пусто")
+            }.forEach { appendLine(it) }
+            appendLine()
+            appendLine("app_events:")
+            AppDiagnostics.snapshot().ifEmpty {
                 listOf("[${Instant.now()}] Пусто")
             }.forEach { appendLine(it) }
         }
@@ -1414,6 +1496,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return url.removeSuffix(".git").replace("git@github.com:", "https://github.com/")
     }
 
+    private fun keepAliveMessage(state: MainUiState): String {
+        return when {
+            state.openAiAccount.loginState == OpenAiLoginState.WAITING_BROWSER_AUTH ->
+                "Жду завершения входа в ChatGPT для ${state.selectedAccount?.username ?: "аккаунта"}"
+            state.connectionState.status == ConnectionStatus.RECONNECTING ->
+                "Переподключаю ${state.selectedAccount?.displayName ?: "сервер"}"
+            state.connectionState.status == ConnectionStatus.CONNECTING ->
+                "Подключаю ${state.selectedAccount?.displayName ?: "сервер"}"
+            state.connectionState.status == ConnectionStatus.CONNECTED ->
+                "Держу активной сессию ${state.selectedAccount?.displayName ?: "Codex"}"
+            else -> "Codex Android"
+        }
+    }
+
     private fun selectRateLimitWindow(
         snapshot: CodexRateLimitSnapshot?,
         targetDurationMins: Long,
@@ -1442,4 +1538,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return (this is CancellationException && this !is TimeoutCancellationException) ||
             (message?.contains("cancelled", ignoreCase = true) == true)
     }
+
+    private data class KeepAliveDescriptor(
+        val active: Boolean,
+        val title: String,
+        val message: String,
+    )
 }

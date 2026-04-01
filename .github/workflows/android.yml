@@ -48,7 +48,12 @@ jobs:
           GITHUB_DEVICE_CLIENT_ID: ${{ secrets.GITHUB_DEVICE_CLIENT_ID }}
         run: |
           set -o pipefail
-          ./gradlew assembleDebug --stacktrace --console=plain 2>&1 | tee gradle-build.log
+          ./gradlew \
+            assembleDebug \
+            -PCI_VERSION_CODE=${{ github.run_number }} \
+            -PCI_VERSION_NAME=0.1.${{ github.run_number }} \
+            --stacktrace \
+            --console=plain 2>&1 | tee gradle-build.log
 
       - name: Upload build log
         if: always()

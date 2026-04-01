@@ -288,13 +288,15 @@ internal class ManagedRemoteSession(
         val output = executeShell(
             """
             python3 - <<'PY'
-            import filecmp, json
+            import filecmp, hashlib, json
             from pathlib import Path
 
             home = Path.home()
             profiles_dir = home / ".codex" / "profiles"
             profiles_dir.mkdir(parents=True, exist_ok=True)
             auth_path = home / ".codex" / "auth.json"
+            seen_hashes = set()
+            active_seen = False
 
             def walk(value):
                 if isinstance(value, dict):
@@ -320,9 +322,17 @@ internal class ManagedRemoteSession(
                             return value
                 return ""
 
+            def file_hash(path):
+                return hashlib.sha256(path.read_bytes()).hexdigest()
+
             for profile in sorted(profiles_dir.glob("*.json")):
                 name = profile.stem
+                digest = file_hash(profile)
+                if digest in seen_hashes:
+                    continue
+                seen_hashes.add(digest)
                 active = int(auth_path.exists() and filecmp.cmp(profile, auth_path, shallow=False))
+                active_seen = active_seen or bool(active)
                 email = ""
                 plan = ""
                 try:
@@ -332,6 +342,17 @@ internal class ManagedRemoteSession(
                 except Exception:
                     email = name if "@" in name else ""
                 print(f"{name}\t{active}\t{email}\t{plan}")
+
+            if auth_path.exists() and not active_seen:
+                email = ""
+                plan = ""
+                try:
+                    payload = json.loads(auth_path.read_text())
+                    email = guess_email(payload, "current")
+                    plan = guess_plan(payload)
+                except Exception:
+                    pass
+                print(f"current\t1\t{email}\t{plan}")
             PY
             """.trimIndent(),
         )
@@ -361,6 +382,13 @@ internal class ManagedRemoteSession(
               printf '%s' "__NO_AUTH__"
               exit 0
             fi
+            for existing in "${'$'}HOME"/.codex/profiles/*.json; do
+              [ -e "${'$'}existing" ] || break
+              if cmp -s "${'$'}existing" "${'$'}AUTH"; then
+                basename "${'$'}existing" .json
+                exit 0
+              fi
+            done
             base=${shellEscape(profileName)}
             if [ -e "${'$'}HOME/.codex/profiles/${'$'}base.json" ]; then
               cp "${'$'}AUTH" "${'$'}HOME/.codex/profiles/${'$'}base.json"

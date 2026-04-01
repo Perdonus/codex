@@ -1663,7 +1663,11 @@ private fun CodexProfileSheet(state: MainUiState, viewModel: MainViewModel) {
                     CodexProfileCard(
                         profile = profile,
                         selected = profile.isActive,
-                        onClick = { viewModel.selectCodexProfile(profile.name) },
+                        onClick = {
+                            if (!profile.isActive) {
+                                viewModel.selectCodexProfile(profile.name)
+                            }
+                        },
                     )
                 }
             }
@@ -1703,7 +1707,7 @@ private fun CodexProfileCard(
                 )
                 Text(
                     text = buildString {
-                        append(profile.name)
+                        append(if (profile.name == "current") "Текущий auth.json" else profile.name)
                         profile.planType?.let {
                             append(" • ")
                             append(it)
@@ -1714,6 +1718,13 @@ private fun CodexProfileCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (selected) {
+                    Text(
+                        text = "Активен",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),

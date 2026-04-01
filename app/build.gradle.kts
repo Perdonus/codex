@@ -7,13 +7,15 @@ plugins {
 android {
     namespace = "com.codex.android.app"
     compileSdk = 36
+    val ciVersionCode = providers.gradleProperty("CI_VERSION_CODE").orNull?.toIntOrNull() ?: 1
+    val ciVersionName = providers.gradleProperty("CI_VERSION_NAME").orNull ?: "0.1.$ciVersionCode"
 
     defaultConfig {
         applicationId = "com.codex.android.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = ciVersionCode
+        versionName = ciVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
 
@@ -26,6 +28,21 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    signingConfigs {
+        create("sharedDebug") {
+            storeFile = rootProject.file("keystore/codex-debug.keystore")
+            storePassword = "android"
+            keyAlias = "codexdebug"
+            keyPassword = "android"
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("sharedDebug")
+        }
     }
 
     compileOptions {
