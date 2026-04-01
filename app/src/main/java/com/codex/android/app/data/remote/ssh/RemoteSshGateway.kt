@@ -86,7 +86,7 @@ class RemoteSshGateway(
 
     private fun executeCommand(client: SSHClient, command: String): String {
         client.startSession().use { session ->
-            val cmd = session.exec("sh -lc ${shellEscape(command)}")
+            val cmd = session.exec(shellCommand(command))
             val stdout = cmd.inputStream.bufferedReader().readText()
             val stderr = cmd.errorStream.bufferedReader().readText()
             cmd.join()
@@ -117,6 +117,7 @@ internal class ManagedRemoteSession(
         val command = """
             PORT=$port
             FORCE_RESTART=${if (forceRestart) 1 else 0}
+            CODEX_CMD='codex --search --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127.0.0.1:'"${'$'}PORT"
             port_listening() {
               if command -v ss >/dev/null 2>&1; then
                 ss -ltn 2>/dev/null | grep -q ":${'$'}PORT "
@@ -138,7 +139,7 @@ internal class ManagedRemoteSession(
                   kill "${'$'}pid" 2>/dev/null || true
                 done
               fi
-              pkill -f "codex --search --sandbox danger-full-access --ask-for-approval never --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127.0.0.1:${'$'}PORT" 2>/dev/null || true
+              pkill -f "codex --search --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127.0.0.1:${'$'}PORT" 2>/dev/null || true
               sleep 1
             fi
             if ! command -v codex >/dev/null 2>&1; then
@@ -146,11 +147,12 @@ internal class ManagedRemoteSession(
               exit 127
             fi
             if ! port_listening; then
-              nohup sh -lc 'codex --search --sandbox danger-full-access --ask-for-approval never --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127.0.0.1:'"${'$'}PORT"' > "'"${'$'}HOME"'/.codex-android-app-server-'"${'$'}PORT"'.log" 2>&1' >/dev/null 2>&1 &
+              nohup bash -lc "${'$'}CODEX_CMD" > "${'$'}HOME/.codex-android-app-server-${'$'}PORT.log" 2>&1 &
               sleep 2
             fi
             if ! port_listening; then
               echo "__CODEX_APP_SERVER_FAILED__"
+              [ -f "${'$'}HOME/.codex-android-app-server-${'$'}PORT.log" ] && tail -80 "${'$'}HOME/.codex-android-app-server-${'$'}PORT.log"
               exit 126
             fi
             printf '%s' "${'$'}PORT"
@@ -185,7 +187,7 @@ internal class ManagedRemoteSession(
 
     suspend fun executeShell(command: String): String = withContext(Dispatchers.IO) {
         client.startSession().use { session ->
-            val cmd = session.exec("sh -lc ${shellEscape(command)}")
+            val cmd = session.exec(shellCommand(command))
             val stdout = cmd.inputStream.bufferedReader().readText()
             val stderr = cmd.errorStream.bufferedReader().readText()
             cmd.join()
@@ -428,6 +430,11 @@ internal class ManagedRemoteSession(
 
     private fun shellEscape(value: String): String {
         return "'" + value.replace("'", "'\"'\"'") + "'"
+    }
+
+    private fun shellCommand(command: String): String {
+        val escaped = shellEscape(command)
+        return "if command -v bash >/dev/null 2>&1; then bash -lc $escaped; else sh -lc $escaped; fi"
     }
 
     private fun normalizeGitRemoteUrl(url: String): String {

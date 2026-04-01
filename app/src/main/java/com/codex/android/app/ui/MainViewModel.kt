@@ -171,11 +171,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.value.connectionState.message ?: "Не удалось подключиться к серверу"
                 }
             }.onFailure { error ->
+                val message = error.message ?: "Ошибка входа"
+                val status = when {
+                    message.contains("Exhausted available authentication methods", ignoreCase = true) -> ConnectionStatus.FAILED_AUTH
+                    else -> ConnectionStatus.FAILED_SERVER
+                }
                 _uiState.update {
-                    it.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_AUTH, error.message ?: "Ошибка входа"))
+                    it.copy(connectionState = ConnectionState(status, message))
                 }
                 appendDiagnostic("Ошибка bootstrap SSH: ${error.message ?: "unknown"}")
-                showMessage(error.message ?: "Не удалось подготовить аккаунт")
+                showMessage(message)
             }
         }
     }
