@@ -117,7 +117,6 @@ internal class ManagedRemoteSession(
         val command = """
             PORT=$port
             FORCE_RESTART=${if (forceRestart) 1 else 0}
-            CODEX_CMD='codex --search --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127.0.0.1:'"${'$'}PORT"
             port_listening() {
               if command -v ss >/dev/null 2>&1; then
                 ss -ltn 2>/dev/null | grep -q ":${'$'}PORT "
@@ -147,7 +146,7 @@ internal class ManagedRemoteSession(
               exit 127
             fi
             if ! port_listening; then
-              nohup bash -lc "${'$'}CODEX_CMD" > "${'$'}HOME/.codex-android-app-server-${'$'}PORT.log" 2>&1 &
+              nohup bash -lc 'codex --search --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox app-server --listen ws://127.0.0.1:'"${'$'}PORT" > "${'$'}HOME/.codex-android-app-server-${'$'}PORT.log" 2>&1 &
               sleep 2
             fi
             if ! port_listening; then
