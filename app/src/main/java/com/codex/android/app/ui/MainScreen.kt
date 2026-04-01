@@ -1629,7 +1629,7 @@ private fun CodexProfileSheet(state: MainUiState, viewModel: MainViewModel) {
         ) {
             Text("Аккаунты Codex", style = MaterialTheme.typography.titleLarge)
             Text(
-                text = "Профили работают через ~/.codex/profiles/*.json и замену ~/.codex/auth.json на сервере.",
+                text = "Профили читаются из ~/.codex/profiles/*.json, а активный аккаунт переключается заменой ~/.codex/auth.json на сервере.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1652,7 +1652,7 @@ private fun CodexProfileSheet(state: MainUiState, viewModel: MainViewModel) {
                     ) {
                         Text("Сохранённых профилей Codex пока нет", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "После первого успешного входа текущий auth.json будет сохранён сюда автоматически.",
+                            "После входа новый аккаунт сохраняется сюда один раз. Если текущий auth.json не совпадает ни с одним файлом, он будет показан отдельно как текущий.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1757,7 +1757,7 @@ private fun UsageGauge(window: com.codex.android.app.core.model.CodexUsageWindow
             drawArc(
                 color = accentColor,
                 startAngle = -90f,
-                sweepAngle = 360f * (window.progress ?: 0.18f).coerceIn(0f, 1f),
+                sweepAngle = 360f * (window.progress ?: 0f).coerceIn(0f, 1f),
                 useCenter = false,
                 style = Stroke(width = 9f, cap = StrokeCap.Round),
                 size = Size(size.width, size.height),

@@ -288,7 +288,7 @@ internal class ManagedRemoteSession(
         val output = executeShell(
             """
             python3 - <<'PY'
-            import filecmp, json
+            import base64, filecmp, json
             from pathlib import Path
 
             home = Path.home()
@@ -296,6 +296,25 @@ internal class ManagedRemoteSession(
             profiles_dir.mkdir(parents=True, exist_ok=True)
             auth_path = home / ".codex" / "auth.json"
             active_seen = False
+
+            def decode_json(text):
+                try:
+                    return json.loads(text)
+                except Exception:
+                    return {}
+
+            def decode_jwt_payload(token):
+                if not token:
+                    return {}
+                parts = token.split(".")
+                if len(parts) < 2:
+                    return {}
+                payload = parts[1]
+                payload += "=" * ((4 - len(payload) % 4) % 4)
+                try:
+                    return json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")))
+                except Exception:
+                    return {}
 
             def walk(value):
                 if isinstance(value, dict):
@@ -321,30 +340,56 @@ internal class ManagedRemoteSession(
                             return value
                 return ""
 
+            def profile_info(path, fallback_name):
+                payload = decode_json(path.read_text()) if path.exists() else {}
+                jwt_payload = decode_jwt_payload(payload.get("tokens", {}).get("id_token", ""))
+                auth_meta = jwt_payload.get("https://api.openai.com/auth", {}) if isinstance(jwt_payload, dict) else {}
+                email = ""
+                if isinstance(jwt_payload, dict):
+                    email = jwt_payload.get("email", "")
+                if not email:
+                    email = guess_email(payload, fallback_name)
+                plan = ""
+                if isinstance(auth_meta, dict):
+                    plan = auth_meta.get("chatgpt_plan_type", "") or auth_meta.get("plan_type", "")
+                if not plan:
+                    plan = guess_plan(payload)
+                return {
+                    "email": email or "",
+                    "plan": plan or "",
+                    "sub": jwt_payload.get("sub", "") if isinstance(jwt_payload, dict) else "",
+                    "account_id": auth_meta.get("chatgpt_account_id", "") if isinstance(auth_meta, dict) else "",
+                }
+
+            def same_identity(left, right):
+                if not left or not right:
+                    return False
+                for key in ("account_id", "sub", "email"):
+                    if left.get(key) and right.get(key) and left.get(key) == right.get(key):
+                        return True
+                return False
+
+            auth_info = profile_info(auth_path, "current") if auth_path.exists() else None
+            emitted_identity_keys = set()
+
             for profile in sorted(profiles_dir.glob("*.json")):
                 name = profile.stem
-                active = int(auth_path.exists() and filecmp.cmp(profile, auth_path, shallow=False))
+                info = profile_info(profile, name)
+                identity_key = info["account_id"] or info["sub"] or info["email"] or name
+                if identity_key in emitted_identity_keys:
+                    continue
+                active = int(
+                    auth_path.exists() and (
+                        filecmp.cmp(profile, auth_path, shallow=False) or same_identity(info, auth_info)
+                    )
+                )
                 active_seen = active_seen or bool(active)
-                email = ""
-                plan = ""
-                try:
-                    payload = json.loads(profile.read_text())
-                    email = guess_email(payload, name)
-                    plan = guess_plan(payload)
-                except Exception:
-                    email = name if "@" in name else ""
-                print(f"{name}\t{active}\t{email}\t{plan}")
+                emitted_identity_keys.add(identity_key)
+                print(f"{name}\t{active}\t{info['email']}\t{info['plan']}")
 
             if auth_path.exists() and not active_seen:
-                email = ""
-                plan = ""
-                try:
-                    payload = json.loads(auth_path.read_text())
-                    email = guess_email(payload, "current")
-                    plan = guess_plan(payload)
-                except Exception:
-                    pass
-                print(f"current\t1\t{email}\t{plan}")
+                info = auth_info or {"email": "", "plan": ""}
+                print(f"current\t1\t{info['email']}\t{info['plan']}")
             PY
             """.trimIndent(),
         )
@@ -356,8 +401,8 @@ internal class ManagedRemoteSession(
                 CodexProfile(
                     name = parts[0],
                     isActive = isActive,
-                    email = (if (isActive) activeEmail else parts.getOrNull(2)).takeUnless { it.isNullOrBlank() },
-                    planType = (if (isActive) activePlanType else parts.getOrNull(3)).takeUnless { it.isNullOrBlank() },
+                    email = (if (isActive) activeEmail ?: parts.getOrNull(2) else parts.getOrNull(2)).takeUnless { it.isNullOrBlank() },
+                    planType = (if (isActive) activePlanType ?: parts.getOrNull(3) else parts.getOrNull(3)).takeUnless { it.isNullOrBlank() },
                 )
             }
             .sortedWith(compareByDescending<CodexProfile> { it.isActive }.thenBy { it.name.lowercase() })
@@ -368,33 +413,76 @@ internal class ManagedRemoteSession(
         val profileName = sanitizeProfileName(preferredName)
         val output = executeShell(
             """
-            mkdir -p "${'$'}HOME/.codex/profiles"
-            AUTH="${'$'}HOME/.codex/auth.json"
-            if [ ! -f "${'$'}AUTH" ]; then
-              printf '%s' "__NO_AUTH__"
-              exit 0
-            fi
-            for existing in "${'$'}HOME"/.codex/profiles/*.json; do
-              [ -e "${'$'}existing" ] || break
-              if cmp -s "${'$'}existing" "${'$'}AUTH"; then
-                basename "${'$'}existing" .json
-                exit 0
-              fi
-            done
-            base=${shellEscape(profileName)}
-            if [ -e "${'$'}HOME/.codex/profiles/${'$'}base.json" ]; then
-              cp "${'$'}AUTH" "${'$'}HOME/.codex/profiles/${'$'}base.json"
-              printf '%s' "${'$'}base"
-              exit 0
-            fi
-            candidate="${'$'}base"
-            index=2
-            while [ -e "${'$'}HOME/.codex/profiles/${'$'}candidate.json" ] && ! cmp -s "${'$'}HOME/.codex/profiles/${'$'}candidate.json" "${'$'}AUTH"; do
-              candidate="${'$'}base-${'$'}index"
-              index=$((index + 1))
-            done
-            cp "${'$'}AUTH" "${'$'}HOME/.codex/profiles/${'$'}candidate.json"
-            printf '%s' "${'$'}candidate"
+            PREFERRED=${shellEscape(profileName)} python3 - <<'PY'
+            import base64, filecmp, json, os, re, shutil
+            from pathlib import Path
+
+            home = Path.home()
+            profiles_dir = home / ".codex" / "profiles"
+            profiles_dir.mkdir(parents=True, exist_ok=True)
+            auth_path = home / ".codex" / "auth.json"
+            preferred = os.environ.get("PREFERRED", "profile")
+
+            if not auth_path.exists():
+                print("__NO_AUTH__", end="")
+                raise SystemExit(0)
+
+            def sanitize(raw):
+                cleaned = re.sub(r"[^a-z0-9@._-]+", "-", raw.strip().lower()).strip("-")
+                return cleaned or "profile"
+
+            def decode_json(path):
+                try:
+                    return json.loads(path.read_text())
+                except Exception:
+                    return {}
+
+            def decode_jwt_payload(token):
+                if not token:
+                    return {}
+                parts = token.split(".")
+                if len(parts) < 2:
+                    return {}
+                payload = parts[1]
+                payload += "=" * ((4 - len(payload) % 4) % 4)
+                try:
+                    return json.loads(base64.urlsafe_b64decode(payload.encode("utf-8")))
+                except Exception:
+                    return {}
+
+            def profile_info(path):
+                payload = decode_json(path)
+                jwt_payload = decode_jwt_payload(payload.get("tokens", {}).get("id_token", ""))
+                auth_meta = jwt_payload.get("https://api.openai.com/auth", {}) if isinstance(jwt_payload, dict) else {}
+                return {
+                    "email": jwt_payload.get("email", "") if isinstance(jwt_payload, dict) else "",
+                    "sub": jwt_payload.get("sub", "") if isinstance(jwt_payload, dict) else "",
+                    "account_id": auth_meta.get("chatgpt_account_id", "") if isinstance(auth_meta, dict) else "",
+                }
+
+            def same_identity(left, right):
+                for key in ("account_id", "sub", "email"):
+                    if left.get(key) and right.get(key) and left.get(key) == right.get(key):
+                        return True
+                return False
+
+            auth_info = profile_info(auth_path)
+
+            for existing in sorted(profiles_dir.glob("*.json")):
+                if filecmp.cmp(existing, auth_path, shallow=False) or same_identity(profile_info(existing), auth_info):
+                    shutil.copy2(auth_path, existing)
+                    print(existing.stem, end="")
+                    raise SystemExit(0)
+
+            base = sanitize(preferred)
+            candidate = profiles_dir / f"{base}.json"
+            index = 2
+            while candidate.exists():
+                candidate = profiles_dir / f"{base}-{index}.json"
+                index += 1
+            shutil.copy2(auth_path, candidate)
+            print(candidate.stem, end="")
+            PY
             """.trimIndent(),
         ).trim()
         if (output == "__NO_AUTH__") {

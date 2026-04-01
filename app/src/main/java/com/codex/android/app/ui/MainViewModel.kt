@@ -80,7 +80,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val diagnosticEntries = ArrayDeque<String>()
     private val connectionMutex = Mutex()
     private var connectionGeneration = 0L
-    private var lastAutoSavedCodexProfileEmail: String? = null
     private var keepAliveHeartbeatCount = 0L
     private var lastKeepAliveSuccessAt: Instant? = null
 
@@ -772,7 +771,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             startKeepAliveLoop(account.id)
             refreshDirectory(home, refreshThreads = false)
             syncCodexProfiles(
-                autoSaveCurrent = false,
                 activeEmail = accountStatus.account?.email,
                 activePlanType = accountStatus.account?.planType,
                 rateLimits = rateLimits,
@@ -846,7 +844,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     is CodexEvent.AccountLoginCompleted -> {
                         if (event.success) {
-                            refreshOpenAiAccountStatus(refreshToken = true)
+                            refreshOpenAiAccountStatus(refreshToken = true, persistProfileOnSuccess = true)
                         } else {
                             openAiPollingJob?.cancel()
                             _uiState.update { state ->
@@ -1101,7 +1099,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val status = runCatching { client.getAccount() }.getOrNull() ?: return@repeat
                 applyOpenAiAccountStatus(status)
                 val pendingId = _uiState.value.openAiAccount.pendingLoginId
-                if (status.account != null || pendingId == null || pendingId != loginId) {
+                if (status.account != null) {
+                    refreshOpenAiAccountStatus(refreshToken = true, persistProfileOnSuccess = true)
+                    return@launch
+                }
+                if (pendingId == null || pendingId != loginId) {
                     return@launch
                 }
             }
@@ -1112,6 +1114,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         authModeHint: OpenAiAuthMode? = null,
         planTypeHint: String? = null,
         refreshToken: Boolean = false,
+        persistProfileOnSuccess: Boolean = false,
     ) {
         val client = codexClient ?: return
         _uiState.update {
@@ -1127,9 +1130,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         runCatching { client.getAccount(refreshToken = refreshToken) }
             .onSuccess { status ->
                 val rateLimits = runCatching { client.getAccountRateLimits() }.getOrNull()
+                if (persistProfileOnSuccess) {
+                    persistCurrentCodexProfile(status.account?.email)
+                }
                 applyOpenAiAccountStatus(status, authModeHint, planTypeHint, rateLimits)
                 syncCodexProfiles(
-                    autoSaveCurrent = false,
                     activeEmail = status.account?.email,
                     activePlanType = status.account?.planType ?: planTypeHint,
                     rateLimits = rateLimits,
@@ -1221,20 +1226,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun syncCodexProfiles(
-        autoSaveCurrent: Boolean = false,
         activeEmail: String? = _uiState.value.openAiAccount.email,
         activePlanType: String? = _uiState.value.openAiAccount.planType,
         rateLimits: CodexRateLimitSnapshot? = _uiState.value.openAiAccount.rateLimits,
     ) {
         val session = remoteSession ?: return
-        if (autoSaveCurrent && activeEmail != null && activeEmail != lastAutoSavedCodexProfileEmail) {
-            activeEmail
-                ?.takeIf { it.isNotBlank() }
-                ?.let { email ->
-                    runCatching { session.saveCurrentCodexProfile(email) }
-                        .onSuccess { lastAutoSavedCodexProfileEmail = email }
-                }
-        }
         runCatching {
             session.listCodexProfiles(
                 activeEmail = activeEmail,
@@ -1256,14 +1252,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 )
                             } else {
                                 profile.copy(
-                                    fiveHourWindow = profile.fiveHourWindow.copy(valueLabel = "Нет", progress = 0f),
-                                    weeklyWindow = profile.weeklyWindow.copy(valueLabel = "Нет", progress = 0f),
+                                    fiveHourWindow = profile.fiveHourWindow.copy(valueLabel = "Н/Д", progress = null),
+                                    weeklyWindow = profile.weeklyWindow.copy(valueLabel = "Н/Д", progress = null),
                                 )
                             }
                         },
                 )
             }
+            appendDiagnostic(
+                "Профили Codex: " +
+                    profiles.joinToString { profile ->
+                        val marker = if (profile.isActive) "*" else "-"
+                        "$marker${profile.email ?: profile.name}"
+                    },
+            )
+        }.onFailure { error ->
+            appendDiagnostic("Не удалось синхронизировать профили Codex: ${error.message ?: "unknown"}")
+            AppDiagnostics.log("Codex profiles sync failed: ${error.message ?: "unknown"}")
         }
+    }
+
+    private suspend fun persistCurrentCodexProfile(preferredName: String?) {
+        val session = remoteSession ?: return
+        val normalizedName = preferredName?.trim().takeUnless { it.isNullOrBlank() } ?: "profile"
+        runCatching { session.saveCurrentCodexProfile(normalizedName) }
+            .onSuccess { savedName ->
+                appendDiagnostic("Текущий Codex-профиль сохранён: $savedName")
+                AppDiagnostics.log("Codex profile saved: $savedName")
+            }
+            .onFailure { error ->
+                appendDiagnostic("Не удалось сохранить текущий Codex-профиль: ${error.message ?: "unknown"}")
+                AppDiagnostics.log("Codex profile save failed: ${error.message ?: "unknown"}")
+            }
     }
 
     private fun bindingFor(threadId: String, persisted: com.codex.android.app.core.model.PersistedAppState): ConversationBinding? {
@@ -1389,6 +1409,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appendLine("codex_client_open=${codexClient != null}")
             appendLine("accounts_count=${state.accounts.size}")
             appendLine("codex_profiles_count=${state.codexProfiles.size}")
+            appendLine(
+                "codex_profiles=" + state.codexProfiles.joinToString("|") { profile ->
+                    buildString {
+                        append(profile.name)
+                        append(":")
+                        append(profile.email ?: "none")
+                        append(":")
+                        append(profile.planType ?: "none")
+                        append(":")
+                        append(if (profile.isActive) "active" else "inactive")
+                    }
+                },
+            )
             appendLine("threads_count=${state.threads.size}")
             appendLine()
             appendLine("recent_events:")
