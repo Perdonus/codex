@@ -357,6 +357,8 @@ private fun SidebarPanel(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier,
 ) {
+    var showFolderPicker by remember { mutableStateOf(false) }
+
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(36.dp),
@@ -371,15 +373,181 @@ private fun SidebarPanel(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SidebarServerCard(state = state, viewModel = viewModel)
+            FolderPickerCard(
+                currentDirectory = state.sidebar.currentDirectory,
+                onOpenPicker = { showFolderPicker = true },
+                onRefresh = { viewModel.refreshDirectory(refreshThreads = false) },
+            )
             ThreadSection(
                 state = state,
                 viewModel = viewModel,
                 modifier = Modifier.weight(1f),
             )
-            FileSection(
-                state = state,
-                viewModel = viewModel,
+        }
+    }
+
+    if (showFolderPicker) {
+        FolderPickerSheet(
+            state = state,
+            onDismiss = { showFolderPicker = false },
+            onOpenDirectory = { path -> viewModel.enterDirectory(path) },
+            onRefresh = { viewModel.refreshDirectory(refreshThreads = false) },
+        )
+    }
+}
+
+@Composable
+private fun FolderPickerCard(
+    currentDirectory: String,
+    onOpenPicker: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        shape = RoundedCornerShape(28.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
                 modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = "Папка",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = currentDirectory,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OutlinedIconButton(onClick = onRefresh) {
+                Icon(Icons.Rounded.Refresh, contentDescription = "Обновить папку")
+            }
+            FilledTonalButton(onClick = onOpenPicker) {
+                Text("Выбрать папку")
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderPickerSheet(
+    state: MainUiState,
+    onDismiss: () -> Unit,
+    onOpenDirectory: (String) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val directories = state.sidebar.remoteFiles.filter { it.isDirectory }
+    val parentDirectory = remember(state.sidebar.currentDirectory) { parentDirectoryOf(state.sidebar.currentDirectory) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text("Выбрать папку", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = state.sidebar.currentDirectory,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                OutlinedIconButton(onClick = onRefresh) {
+                    Icon(Icons.Rounded.Refresh, contentDescription = "Обновить список папок")
+                }
+            }
+            parentDirectory?.let { parent ->
+                FolderPickerRow(
+                    name = "..",
+                    selected = false,
+                    onClick = { onOpenDirectory(parent) },
+                )
+            }
+            if (directories.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                ) {
+                    Text(
+                        text = "В этой папке нет вложенных директорий.",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                directories.forEach { node ->
+                    FolderPickerRow(
+                        name = node.name,
+                        selected = false,
+                        onClick = { onOpenDirectory(node.path) },
+                    )
+                }
+            }
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Готово")
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun FolderPickerRow(
+    name: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick),
+        shape = RoundedCornerShape(22.dp),
+        color = if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
             )
         }
     }
@@ -502,54 +670,74 @@ private fun ThreadSection(
                     Text("Новый")
                 }
             }
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                items(state.threads, key = { it.threadId }) { thread ->
-                    val selected = thread.threadId == state.selectedThreadId
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                onClick = { viewModel.selectThread(thread.threadId) },
-                                onLongClick = { viewModel.toggleThreadPinned(thread.threadId) },
-                            ),
-                        shape = RoundedCornerShape(24.dp),
-                        color = if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surface,
+            if (state.threads.isEmpty()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        Column(
-                            modifier = Modifier.padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        Text("В этой папке пока нет диалогов", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = "Выберите другую папку или создайте новый чат.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(state.threads, key = { it.threadId }) { thread ->
+                        val selected = thread.threadId == state.selectedThreadId
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = { viewModel.selectThread(thread.threadId) },
+                                    onLongClick = { viewModel.toggleThreadPinned(thread.threadId) },
+                                ),
+                            shape = RoundedCornerShape(24.dp),
+                            color = if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surface,
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = thread.title.ifBlank { thread.preview },
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    RunningDot(thread.status)
+                                }
                                 Text(
-                                    text = thread.title.ifBlank { thread.preview },
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                                    text = thread.preview.ifBlank { "Пустой диалог" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = thread.cwd,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
-                                RunningDot(thread.status)
                             }
-                            Text(
-                                text = thread.preview.ifBlank { "Пустой диалог" },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = thread.cwd,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
                         }
                     }
                 }

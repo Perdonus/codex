@@ -19,7 +19,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -69,16 +71,25 @@ class CodexAppServerClient(
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    socket = null
+                    failPending(t.message ?: "WebSocket failure", t)
                     failed.complete(t)
                     _events.tryEmit(CodexEvent.ConnectionProblem(t.message ?: "WebSocket failure"))
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    socket = null
+                    failPending(reason.ifBlank { "WebSocket closed" })
                     _events.tryEmit(CodexEvent.ConnectionClosed(reason))
                 }
             },
         )
-        opened.await()
+        withTimeout(10_000L) {
+            select<Unit> {
+                opened.onAwait { }
+                failed.onAwait { throw it }
+            }
+        }
         initialize()
         if (failed.isCompleted) throw failed.await()
     }
@@ -87,6 +98,12 @@ class CodexAppServerClient(
         socket?.close(1000, "closing")
         socket = null
         pending.values.forEach { it.cancel() }
+        pending.clear()
+    }
+
+    private fun failPending(message: String, cause: Throwable? = null) {
+        val failure = cause ?: IOException(message)
+        pending.values.forEach { it.completeExceptionally(failure) }
         pending.clear()
     }
 

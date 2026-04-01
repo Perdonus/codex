@@ -39,8 +39,10 @@ import com.codex.android.app.data.remote.ssh.PortForwardHandle
 import java.io.File
 import java.time.Instant
 import kotlin.math.abs
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,6 +50,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -65,8 +69,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var codexClient: CodexAppServerClient? = null
     private var codexEventsJob: Job? = null
     private var reconnectJob: Job? = null
+    private var connectionJob: Job? = null
     private var openAiPollingJob: Job? = null
     private val diagnosticEntries = ArrayDeque<String>()
+    private val connectionMutex = Mutex()
+    private var connectionGeneration = 0L
+    private var lastAutoSavedCodexProfileEmail: String? = null
 
     init {
         viewModelScope.launch {
@@ -75,7 +83,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             syncFromLocalState()
             persisted.selectedAccountId?.let { accountId ->
                 if (sshKeyManager.hasKey(accountId)) {
-                    connectAccount(accountId)
+                    launchConnectionTask {
+                        connectAccount(accountId)
+                    }
                 } else {
                     promptForAccountPassword(accountId)
                 }
@@ -83,6 +93,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             localStateRepository.state().collectLatest {
                 syncFromLocalState()
             }
+        }
+    }
+
+    private fun launchConnectionTask(block: suspend () -> Unit) {
+        connectionJob?.cancel()
+        connectionJob = viewModelScope.launch {
+            runCatching { block() }
+                .onFailure { error ->
+                    if (!error.isBenignCancellation()) {
+                        appendDiagnostic("Ошибка задачи подключения: ${error.message ?: "unknown"}")
+                    }
+                }
         }
     }
 
@@ -122,7 +144,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             showMessage("Введите логин и пароль.")
             return
         }
-        viewModelScope.launch {
+        launchConnectionTask {
+            cancelReconnectLoop()
             appendDiagnostic("Старт входа по SSH для $username")
             appendDiagnostic("SSH provider: ${SecurityProviderCompat.currentSshProviderName()}")
             _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Устанавливаю SSH-ключ...")) }
@@ -171,6 +194,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.value.connectionState.message ?: "Не удалось подключиться к серверу"
                 }
             }.onFailure { error ->
+                if (error.isBenignCancellation()) return@onFailure
                 val message = error.message ?: "Ошибка входа"
                 val status = when {
                     message.contains("Exhausted available authentication methods", ignoreCase = true) -> ConnectionStatus.FAILED_AUTH
@@ -186,20 +210,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectAccount(accountId: String) {
-        viewModelScope.launch {
+        launchConnectionTask task@{
+            cancelReconnectLoop()
             localStateRepository.selectAccount(accountId)
             if (!sshKeyManager.hasKey(accountId)) {
                 promptForAccountPassword(accountId)
-                return@launch
+                return@task
             }
             connectAccount(accountId)
         }
     }
 
     fun selectCodexProfile(profileName: String) {
-        viewModelScope.launch {
-            val account = _uiState.value.selectedAccount ?: return@launch
-            val session = remoteSession ?: return@launch
+        launchConnectionTask task@{
+            cancelReconnectLoop()
+            val account = _uiState.value.selectedAccount ?: return@task
+            val session = remoteSession ?: return@task
             _uiState.update {
                 it.copy(
                     connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Переключаю аккаунт Codex..."),
@@ -210,6 +236,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 session.activateCodexProfile(profileName)
                 connectAccount(account.id, forceRestartAppServer = true, bootstrapPassword = null)
             }.onFailure {
+                if (it.isBenignCancellation()) return@onFailure
                 showMessage(it.message ?: "Не удалось переключить аккаунт Codex")
             }
         }
@@ -233,11 +260,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     selectedThreadMessages = state.threads.firstOrNull { it.threadId == threadId }?.messages.orEmpty(),
                 )
             }
-            codexClient?.readThread(threadId)?.let { snapshot ->
-                applyThreadSnapshot(snapshot, preserveSelection = true)
-                _uiState.update { it.copy(sidebar = it.sidebar.copy(currentThreadId = threadId, currentDirectory = snapshot.cwd)) }
-                refreshDirectory(snapshot.cwd)
-            }
+            runCatching { codexClient?.readThread(threadId) }
+                .onSuccess { snapshot ->
+                    snapshot?.let {
+                        applyThreadSnapshot(it, preserveSelection = true)
+                        _uiState.update { state ->
+                            state.copy(sidebar = state.sidebar.copy(currentThreadId = threadId, currentDirectory = it.cwd))
+                        }
+                        refreshDirectory(it.cwd)
+                    }
+                }
+                .onFailure { error ->
+                    if (handleConnectionFailure(error)) return@launch
+                    showMessage(error.message ?: "Не удалось открыть диалог")
+                }
         }
     }
 
@@ -250,7 +286,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 for (thread in threads) {
                     localStateRepository.upsertThreadCache(thread)
                 }
-            }.onFailure { showMessage(it.message ?: "Не удалось обновить диалоги") }
+            }.onFailure {
+                if (handleConnectionFailure(it)) return@onFailure
+                showMessage(it.message ?: "Не удалось обновить диалоги")
+            }
         }
     }
 
@@ -335,6 +374,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         connectionState = ConnectionState(ConnectionStatus.FAILED_SERVER, error.message),
                     )
                 }
+                if (handleConnectionFailure(error)) return@onFailure
                 showMessage(error.message ?: "Не удалось отправить сообщение")
             }
         }
@@ -365,7 +405,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshDirectory(path: String? = null) {
+    fun refreshDirectory(path: String? = null, refreshThreads: Boolean = true) {
         viewModelScope.launch {
             val session = remoteSession ?: return@launch
             val resolved = resolvePath(path ?: _uiState.value.sidebar.currentDirectory)
@@ -384,7 +424,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(sidebar = SidebarState(currentDirectory = resolved, remoteFiles = nodes, currentThreadId = it.selectedThreadId))
                 }
                 syncFromLocalState()
-                refreshThreads()
+                if (refreshThreads) {
+                    refreshThreads()
+                }
             }.onFailure {
                 showMessage(it.message ?: "Не удалось открыть папку")
             }
@@ -619,6 +661,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        connectionJob?.cancel()
         reconnectJob?.cancel()
         codexEventsJob?.cancel()
         openAiPollingJob?.cancel()
@@ -632,13 +675,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return connectAccount(accountId = accountId, forceRestartAppServer = false, bootstrapPassword = null)
     }
 
-    private suspend fun connectAccount(accountId: String, forceRestartAppServer: Boolean, bootstrapPassword: String?): Boolean {
-        reconnectJob?.cancel()
+    private suspend fun connectAccount(
+        accountId: String,
+        forceRestartAppServer: Boolean,
+        bootstrapPassword: String?,
+        fromReconnect: Boolean = false,
+    ): Boolean = connectionMutex.withLock {
+        if (!fromReconnect) {
+            cancelReconnectLoop()
+        }
         val account = localStateRepository.state().value.accounts.firstOrNull { it.id == accountId } ?: return false
-        closeRemoteSession()
+        val generation = ++connectionGeneration
+        closeRemoteSession(
+            resetUi = !fromReconnect,
+            cancelReconnect = false,
+            preserveProfiles = true,
+        )
         appendDiagnostic("Подключение к ${account.displayName}, restartAppServer=$forceRestartAppServer")
-        _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Подключение к ${account.displayName}")) }
-        return runCatching {
+        _uiState.update {
+            it.copy(connectionState = ConnectionState(ConnectionStatus.CONNECTING, "Подключение к ${account.displayName}"))
+        }
+        try {
             val session = remoteSshGateway.openSession(
                 host = account.host,
                 port = account.port,
@@ -656,7 +713,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val client = container.newCodexClient()
             codexClient = client
             client.connect(forwarder.localPort)
-            observeCodexEvents(client)
+            observeCodexEvents(client, generation)
             val models = client.listModels()
             val threads = client.listThreads().map { it.copy(accountId = account.id) }
             for (thread in threads) {
@@ -664,16 +721,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             val accountStatus = client.getAccount()
             val rateLimits = runCatching { client.getAccountRateLimits() }.getOrNull()
-            _uiState.update {
-                it.copy(
+            _uiState.update { state ->
+                state.copy(
                     connectionState = ConnectionState(ConnectionStatus.CONNECTED),
                     models = models,
-                    composer = it.composer.copy(selectedModel = chooseDefaultModel(models, it.composer.selectedModel)),
+                    composer = state.composer.copy(selectedModel = chooseDefaultModel(models, state.composer.selectedModel)),
                     openAiAccount = mapAccountStatus(accountStatus, rateLimits = rateLimits),
                 )
             }
             appendDiagnostic("SSH и Codex app-server подключены для ${account.displayName}")
-            refreshDirectory(home)
+            refreshDirectory(home, refreshThreads = false)
             syncCodexProfiles(
                 autoSaveCurrent = accountStatus.account?.email != null,
                 activeEmail = accountStatus.account?.email,
@@ -684,7 +741,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value.threads.firstOrNull()?.threadId?.let(::selectThread)
             }
             true
-        }.onFailure { error ->
+        } catch (error: Throwable) {
+            if (error.isBenignCancellation()) {
+                appendDiagnostic("Подключение отменено")
+                return false
+            }
             appendDiagnostic("Ошибка подключения: ${error.message ?: "unknown"}")
             val authFailed = error.message?.contains("Exhausted available authentication methods", ignoreCase = true) == true
             if (authFailed && bootstrapPassword.isNullOrBlank()) {
@@ -700,13 +761,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ),
                 )
             }
-        }.getOrDefault(false)
+            false
+        }
     }
 
-    private fun observeCodexEvents(client: CodexAppServerClient) {
+    private fun observeCodexEvents(client: CodexAppServerClient, generation: Long) {
         codexEventsJob?.cancel()
         codexEventsJob = viewModelScope.launch {
             client.events.collectLatest { event ->
+                if (generation != connectionGeneration) return@collectLatest
                 when (event) {
                     is CodexEvent.AgentMessageDelta -> handleAgentDelta(event)
                     is CodexEvent.TurnStarted -> {
@@ -759,17 +822,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     is CodexEvent.ConnectionProblem -> {
-                        appendDiagnostic("Проблема соединения Codex: ${event.message}")
-                        markThreadsReconnecting()
-                        _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.RECONNECTING, event.message), composer = it.composer.copy(isSending = false)) }
-                        _uiState.value.selectedAccountId?.let { scheduleReconnect(it, event.message) }
+                        handleConnectionProblem(event.message)
                     }
 
                     is CodexEvent.ConnectionClosed -> {
-                        appendDiagnostic("Соединение Codex закрыто: ${event.reason}")
-                        markThreadsReconnecting()
-                        _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.RECONNECTING, event.reason), composer = it.composer.copy(isSending = false)) }
-                        _uiState.value.selectedAccountId?.let { scheduleReconnect(it, event.reason) }
+                        handleConnectionProblem(event.reason.ifBlank { "Соединение Codex закрыто" })
                     }
                 }
             }
@@ -927,24 +984,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun scheduleReconnect(accountId: String, message: String) {
-        reconnectJob?.cancel()
+        if (reconnectJob?.isActive == true) return
         reconnectJob = viewModelScope.launch {
             val delays = listOf(1000L, 2000L, 5000L, 10000L)
-            for (delayMs in delays) {
-                _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.RECONNECTING, message)) }
-                delay(delayMs)
-                if (connectAccount(accountId)) return@launch
-            }
-            while (isActive) {
-                _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.RECONNECTING, message)) }
-                delay(10000L)
-                if (connectAccount(accountId)) return@launch
+            try {
+                for (delayMs in delays) {
+                    _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.RECONNECTING, message)) }
+                    delay(delayMs)
+                    if (connectAccount(accountId, forceRestartAppServer = false, bootstrapPassword = null, fromReconnect = true)) {
+                        return@launch
+                    }
+                    if (_uiState.value.connectionState.status == ConnectionStatus.FAILED_AUTH) {
+                        return@launch
+                    }
+                }
+                while (isActive) {
+                    _uiState.update { it.copy(connectionState = ConnectionState(ConnectionStatus.RECONNECTING, message)) }
+                    delay(10000L)
+                    if (connectAccount(accountId, forceRestartAppServer = false, bootstrapPassword = null, fromReconnect = true)) {
+                        return@launch
+                    }
+                    if (_uiState.value.connectionState.status == ConnectionStatus.FAILED_AUTH) {
+                        return@launch
+                    }
+                }
+            } finally {
+                reconnectJob = null
             }
         }
     }
 
-    private suspend fun closeRemoteSession() {
-        reconnectJob?.cancel()
+    private suspend fun closeRemoteSession(
+        resetUi: Boolean = true,
+        cancelReconnect: Boolean = true,
+        preserveProfiles: Boolean = false,
+    ) {
+        if (cancelReconnect) {
+            cancelReconnectLoop()
+        }
         codexEventsJob?.cancel()
         openAiPollingJob?.cancel()
         runCatching { codexClient?.close() }
@@ -953,14 +1030,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         codexClient = null
         portForwardHandle = null
         remoteSession = null
-        _uiState.update {
-            it.copy(
-                connectionState = ConnectionState(ConnectionStatus.DISCONNECTED),
-                composer = it.composer.copy(isSending = false),
-                openAiAccount = OpenAiAccountState(),
-                codexProfiles = emptyList(),
-                pendingExternalUrl = null,
-            )
+        if (resetUi) {
+            _uiState.update {
+                it.copy(
+                    connectionState = ConnectionState(ConnectionStatus.DISCONNECTED),
+                    composer = it.composer.copy(isSending = false),
+                    openAiAccount = OpenAiAccountState(),
+                    codexProfiles = if (preserveProfiles) it.codexProfiles else emptyList(),
+                    pendingExternalUrl = null,
+                )
+            }
+        } else {
+            _uiState.update {
+                it.copy(
+                    composer = it.composer.copy(isSending = false),
+                    pendingExternalUrl = null,
+                )
+            }
         }
     }
 
@@ -1099,11 +1185,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         rateLimits: CodexRateLimitSnapshot? = _uiState.value.openAiAccount.rateLimits,
     ) {
         val session = remoteSession ?: return
-        if (autoSaveCurrent) {
+        if (autoSaveCurrent && activeEmail != null && activeEmail != lastAutoSavedCodexProfileEmail) {
             activeEmail
                 ?.takeIf { it.isNotBlank() }
                 ?.let { email ->
                     runCatching { session.saveCurrentCodexProfile(email) }
+                        .onSuccess { lastAutoSavedCodexProfileEmail = email }
                 }
         }
         runCatching {
@@ -1112,21 +1199,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 activePlanType = activePlanType,
             )
         }.onSuccess { profiles ->
-            val fiveHourWindow = selectRateLimitWindow(rateLimits, targetDurationMins = 300L, fallbackLabel = "5H")
-            val weeklyWindow = selectRateLimitWindow(rateLimits, targetDurationMins = 10080L, fallbackLabel = "7D")
+            val fiveHourWindow = selectRateLimitWindow(rateLimits, targetDurationMins = 300L, fallbackLabel = "5Ч")
+            val weeklyWindow = selectRateLimitWindow(rateLimits, targetDurationMins = 10080L, fallbackLabel = "7Д")
             _uiState.update {
                 it.copy(
-                    codexProfiles = profiles.map { profile ->
-                        if (profile.isActive) {
-                            profile.copy(
-                                planType = activePlanType ?: rateLimits?.planType ?: profile.planType,
-                                fiveHourWindow = fiveHourWindow,
-                                weeklyWindow = weeklyWindow,
-                            )
-                        } else {
-                            profile
+                    codexProfiles = profiles
+                        .groupBy { (it.email ?: it.name).lowercase() }
+                        .values
+                        .map { group ->
+                            group.sortedWith(
+                                compareByDescending<CodexProfile> { it.isActive }
+                                    .thenBy { it.name.contains("-") }
+                                    .thenBy { it.name.length },
+                            ).first()
                         }
-                    },
+                        .sortedWith(compareByDescending<CodexProfile> { it.isActive }.thenBy { it.name.lowercase() })
+                        .map { profile ->
+                            if (profile.isActive) {
+                                profile.copy(
+                                    planType = activePlanType ?: rateLimits?.planType ?: profile.planType,
+                                    fiveHourWindow = fiveHourWindow,
+                                    weeklyWindow = weeklyWindow,
+                                )
+                            } else {
+                                profile.copy(
+                                    fiveHourWindow = profile.fiveHourWindow.copy(valueLabel = "Нет", progress = 0f),
+                                    weeklyWindow = profile.weeklyWindow.copy(valueLabel = "Нет", progress = 0f),
+                                )
+                            }
+                        },
                 )
             }
         }
@@ -1142,6 +1243,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val scope = binding?.directoryScope?.removeSuffix("/")
         val threadCwd = thread.cwd.removeSuffix("/")
         return scope == normalizedCurrent || threadCwd == normalizedCurrent
+    }
+
+    private fun cancelReconnectLoop() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+    }
+
+    private fun handleConnectionProblem(message: String) {
+        if (connectionJob?.isActive == true && _uiState.value.connectionState.status == ConnectionStatus.CONNECTING) {
+            return
+        }
+        if (_uiState.value.connectionState.status == ConnectionStatus.RECONNECTING && reconnectJob?.isActive == true) {
+            return
+        }
+        appendDiagnostic("Проблема соединения Codex: $message")
+        markThreadsReconnecting()
+        _uiState.update {
+            it.copy(
+                connectionState = ConnectionState(ConnectionStatus.RECONNECTING, message),
+                composer = it.composer.copy(isSending = false),
+            )
+        }
+        _uiState.value.selectedAccountId?.let { scheduleReconnect(it, message) }
+    }
+
+    private fun handleConnectionFailure(error: Throwable): Boolean {
+        if (error.isBenignCancellation()) {
+            return true
+        }
+        val message = error.message ?: return false
+        if (
+            message.contains("WebSocket", ignoreCase = true) ||
+            message.contains("Disconnected", ignoreCase = true) ||
+            message.contains("socket", ignoreCase = true)
+        ) {
+            handleConnectionProblem(message)
+            return true
+        }
+        return false
     }
 
     private fun showMessage(message: String) {
@@ -1288,12 +1428,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun CodexRateLimitWindow.toUsageWindow(fallbackLabel: String): CodexUsageWindow {
         return CodexUsageWindow(
             label = when (windowDurationMins) {
-                300L -> "5H"
-                10080L -> "7D"
+                300L -> "5Ч"
+                10080L -> "7Д"
                 else -> fallbackLabel
             },
             valueLabel = "${usedPercent.coerceIn(0, 100)}%",
             progress = usedPercent.coerceIn(0, 100) / 100f,
         )
+    }
+
+    private fun Throwable.isBenignCancellation(): Boolean {
+        return (this is CancellationException && this !is TimeoutCancellationException) ||
+            (message?.contains("cancelled", ignoreCase = true) == true)
     }
 }

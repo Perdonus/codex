@@ -362,6 +362,11 @@ internal class ManagedRemoteSession(
               exit 0
             fi
             base=${shellEscape(profileName)}
+            if [ -e "${'$'}HOME/.codex/profiles/${'$'}base.json" ]; then
+              cp "${'$'}AUTH" "${'$'}HOME/.codex/profiles/${'$'}base.json"
+              printf '%s' "${'$'}base"
+              exit 0
+            fi
             candidate="${'$'}base"
             index=2
             while [ -e "${'$'}HOME/.codex/profiles/${'$'}candidate.json" ] && ! cmp -s "${'$'}HOME/.codex/profiles/${'$'}candidate.json" "${'$'}AUTH"; do
