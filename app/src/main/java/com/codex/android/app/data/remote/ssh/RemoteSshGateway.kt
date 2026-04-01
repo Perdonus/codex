@@ -288,14 +288,13 @@ internal class ManagedRemoteSession(
         val output = executeShell(
             """
             python3 - <<'PY'
-            import filecmp, hashlib, json
+            import filecmp, json
             from pathlib import Path
 
             home = Path.home()
             profiles_dir = home / ".codex" / "profiles"
             profiles_dir.mkdir(parents=True, exist_ok=True)
             auth_path = home / ".codex" / "auth.json"
-            seen_hashes = set()
             active_seen = False
 
             def walk(value):
@@ -322,15 +321,8 @@ internal class ManagedRemoteSession(
                             return value
                 return ""
 
-            def file_hash(path):
-                return hashlib.sha256(path.read_bytes()).hexdigest()
-
             for profile in sorted(profiles_dir.glob("*.json")):
                 name = profile.stem
-                digest = file_hash(profile)
-                if digest in seen_hashes:
-                    continue
-                seen_hashes.add(digest)
                 active = int(auth_path.exists() and filecmp.cmp(profile, auth_path, shallow=False))
                 active_seen = active_seen or bool(active)
                 email = ""

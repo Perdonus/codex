@@ -772,7 +772,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             startKeepAliveLoop(account.id)
             refreshDirectory(home, refreshThreads = false)
             syncCodexProfiles(
-                autoSaveCurrent = accountStatus.account?.email != null,
+                autoSaveCurrent = false,
                 activeEmail = accountStatus.account?.email,
                 activePlanType = accountStatus.account?.planType,
                 rateLimits = rateLimits,
@@ -1129,7 +1129,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val rateLimits = runCatching { client.getAccountRateLimits() }.getOrNull()
                 applyOpenAiAccountStatus(status, authModeHint, planTypeHint, rateLimits)
                 syncCodexProfiles(
-                    autoSaveCurrent = status.account?.email != null,
+                    autoSaveCurrent = false,
                     activeEmail = status.account?.email,
                     activePlanType = status.account?.planType ?: planTypeHint,
                     rateLimits = rateLimits,
