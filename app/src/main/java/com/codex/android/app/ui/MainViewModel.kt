@@ -14,6 +14,7 @@ import com.codex.android.app.core.model.ChatRole
 import com.codex.android.app.core.model.ConnectionState
 import com.codex.android.app.core.model.ConnectionStatus
 import com.codex.android.app.core.model.ConversationBinding
+import com.codex.android.app.core.model.CodexProfile
 import com.codex.android.app.core.model.CodexRateLimitSnapshot
 import com.codex.android.app.core.model.CodexRateLimitWindow
 import com.codex.android.app.core.model.CodexUsageWindow
