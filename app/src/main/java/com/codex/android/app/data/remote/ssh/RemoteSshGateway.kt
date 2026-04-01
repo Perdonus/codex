@@ -98,9 +98,6 @@ class RemoteSshGateway(
         }
     }
 
-    private fun shellEscape(value: String): String {
-        return "'" + value.replace("'", "'\"'\"'") + "'"
-    }
 }
 
 data class BootstrapResult(
@@ -427,15 +424,6 @@ internal class ManagedRemoteSession(
         runCatching { client.disconnect() }
     }
 
-    private fun shellEscape(value: String): String {
-        return "'" + value.replace("'", "'\"'\"'") + "'"
-    }
-
-    private fun shellCommand(command: String): String {
-        val escaped = shellEscape(command)
-        return "if command -v bash >/dev/null 2>&1; then bash -lc $escaped; else sh -lc $escaped; fi"
-    }
-
     private fun normalizeGitRemoteUrl(url: String): String {
         return when {
             url.startsWith("git@github.com:") -> "https://github.com/" + url.removePrefix("git@github.com:").removeSuffix(".git")
@@ -451,6 +439,15 @@ internal class ManagedRemoteSession(
             .trim('-')
             .ifBlank { "profile" }
     }
+}
+
+private fun shellEscape(value: String): String {
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+}
+
+private fun shellCommand(command: String): String {
+    val escaped = shellEscape(command)
+    return "if command -v bash >/dev/null 2>&1; then bash -lc $escaped; else sh -lc $escaped; fi"
 }
 
 data class PortForwardHandle(
