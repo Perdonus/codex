@@ -1,16 +1,10 @@
 package com.codex.android.app.data.remote.ssh
 
 import android.content.Context
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import java.io.File
 import java.math.BigInteger
 import java.security.KeyFactory
-import java.security.KeyPair
 import java.security.KeyPairGenerator
-import java.security.KeyStore
-import java.security.PrivateKey
-import java.security.PublicKey
 import java.security.interfaces.RSAPublicKey
 import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
@@ -19,14 +13,23 @@ class SshKeyManager(
     private val context: Context,
 ) {
     fun generateKeyPair(accountId: String, comment: String): GeneratedSshKeyPair {
-        val alias = keyAlias(accountId)
-        val keyPair = loadKeyPair(accountId) ?: createAndroidKeyStorePair(alias)
+        val existingPrivatePem = loadPrivateKey(accountId)
+        val existingPublicKey = loadPublicKey(accountId)
+        if (existingPrivatePem != null && existingPublicKey != null) {
+            return GeneratedSshKeyPair(privatePem = existingPrivatePem, publicOpenSsh = existingPublicKey)
+        }
+        val keyPair = createPemKeyPair()
+        val privatePem = encodePrivateKeyPem(keyPair.private.encoded)
         val publicOpenSsh = encodePublicKey(keyPair.public.encoded, comment)
+        encryptedPrivateKeyFile(accountId).apply {
+            parentFile?.mkdirs()
+            writeText(privatePem)
+        }
         publicKeyFile(accountId).apply {
             parentFile?.mkdirs()
             writeText(publicOpenSsh)
         }
-        return GeneratedSshKeyPair(publicOpenSsh = publicOpenSsh, storedInAndroidKeyStore = true)
+        return GeneratedSshKeyPair(privatePem = privatePem, publicOpenSsh = publicOpenSsh)
     }
 
     fun store(accountId: String, keyPair: GeneratedSshKeyPair) {
@@ -42,15 +45,7 @@ class SshKeyManager(
     }
 
     fun hasKey(accountId: String): Boolean {
-        return loadKeyPair(accountId) != null || encryptedPrivateKeyFile(accountId).exists()
-    }
-
-    fun loadKeyPair(accountId: String): KeyPair? {
-        val keyStore = loadAndroidKeyStore()
-        val alias = keyAlias(accountId)
-        val privateKey = keyStore.getKey(alias, null) as? PrivateKey ?: return null
-        val publicKey = keyStore.getCertificate(alias)?.publicKey ?: return null
-        return KeyPair(publicKey, privateKey)
+        return encryptedPrivateKeyFile(accountId).exists() && publicKeyFile(accountId).exists()
     }
 
     fun loadPrivateKey(accountId: String): String? {
@@ -64,12 +59,6 @@ class SshKeyManager(
     }
 
     fun delete(accountId: String) {
-        runCatching {
-            val keyStore = loadAndroidKeyStore()
-            if (keyStore.containsAlias(keyAlias(accountId))) {
-                keyStore.deleteEntry(keyAlias(accountId))
-            }
-        }
         encryptedPrivateKeyFile(accountId).delete()
         publicKeyFile(accountId).delete()
     }
@@ -107,38 +96,23 @@ class SshKeyManager(
         return value.toByteArray()
     }
 
-    private fun loadAndroidKeyStore(): KeyStore {
-        return KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-    }
-
-    private fun createAndroidKeyStorePair(alias: String): KeyPair {
-        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, ANDROID_KEYSTORE)
-        val spec = KeyGenParameterSpec.Builder(
-            alias,
-            KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
-        )
-            .setKeySize(4096)
-            .setDigests(
-                KeyProperties.DIGEST_SHA1,
-                KeyProperties.DIGEST_SHA256,
-                KeyProperties.DIGEST_SHA512,
-            )
-            .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
-            .setUserAuthenticationRequired(false)
-            .build()
-        generator.initialize(spec)
+    private fun createPemKeyPair(): java.security.KeyPair {
+        val generator = KeyPairGenerator.getInstance("RSA")
+        generator.initialize(4096)
         return generator.generateKeyPair()
     }
 
-    private fun keyAlias(accountId: String): String = "codex_ssh_$accountId"
-
-    companion object {
-        private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+    private fun encodePrivateKeyPem(encoded: ByteArray): String {
+        val base64 = Base64.getMimeEncoder(64, "\n".toByteArray()).encodeToString(encoded)
+        return buildString {
+            appendLine("-----BEGIN PRIVATE KEY-----")
+            appendLine(base64)
+            appendLine("-----END PRIVATE KEY-----")
+        }
     }
 }
 
 data class GeneratedSshKeyPair(
     val privatePem: String? = null,
     val publicOpenSsh: String,
-    val storedInAndroidKeyStore: Boolean = false,
 )

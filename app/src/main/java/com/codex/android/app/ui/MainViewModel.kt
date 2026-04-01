@@ -73,9 +73,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appendDiagnostic("Приложение запущено")
             val persisted = localStateRepository.load()
             syncFromLocalState()
-            persisted.selectedAccountId
-                ?.takeIf { sshKeyManager.hasKey(it) }
-                ?.let { connectAccount(it) }
+            persisted.selectedAccountId?.let { accountId ->
+                if (sshKeyManager.hasKey(accountId)) {
+                    connectAccount(accountId)
+                } else {
+                    promptForAccountPassword(accountId)
+                }
+            }
             localStateRepository.state().collectLatest {
                 syncFromLocalState()
             }
@@ -179,6 +183,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun selectAccount(accountId: String) {
         viewModelScope.launch {
             localStateRepository.selectAccount(accountId)
+            if (!sshKeyManager.hasKey(accountId)) {
+                promptForAccountPassword(accountId)
+                return@launch
+            }
             connectAccount(accountId)
         }
     }
@@ -673,8 +681,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             true
         }.onFailure { error ->
             appendDiagnostic("Ошибка подключения: ${error.message ?: "unknown"}")
+            val authFailed = error.message?.contains("Exhausted available authentication methods", ignoreCase = true) == true
+            if (authFailed && bootstrapPassword.isNullOrBlank()) {
+                sshKeyManager.delete(account.id)
+                promptForAccountPassword(account.id)
+                showMessage("Введите пароль для повторной привязки SSH.")
+            }
             _uiState.update { state ->
-                state.copy(connectionState = ConnectionState(ConnectionStatus.FAILED_SERVER, error.message))
+                state.copy(
+                    connectionState = ConnectionState(
+                        if (authFailed) ConnectionStatus.FAILED_AUTH else ConnectionStatus.FAILED_SERVER,
+                        error.message,
+                    ),
+                )
             }
         }.getOrDefault(false)
     }
@@ -1166,6 +1185,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             diagnosticEntries.removeFirst()
         }
         diagnosticEntries.addLast(entry)
+    }
+
+    private fun promptForAccountPassword(accountId: String) {
+        val account = localStateRepository.state().value.accounts.firstOrNull { it.id == accountId } ?: return
+        appendDiagnostic("Нужен повторный ввод пароля для ${account.displayName}")
+        _uiState.update {
+            it.copy(
+                accountDraft = AccountDraft(username = account.username),
+                settings = it.settings.copy(showAccountSheet = true),
+            )
+        }
     }
 
     private fun resolvePath(raw: String): String {

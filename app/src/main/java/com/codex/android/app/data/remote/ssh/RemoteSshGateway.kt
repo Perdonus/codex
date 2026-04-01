@@ -63,13 +63,10 @@ class RemoteSshGateway(
         client.connect(host, port)
         try {
             runCatching {
-                val keyProvider = keyManager.loadKeyPair(accountId)?.let(client::loadKeys)
-                    ?: run {
-                        val privateKey = keyManager.loadPrivateKey(accountId)
-                            ?: error("Missing SSH key for account $accountId")
-                        val publicKey = keyManager.loadPublicKey(accountId)
-                        client.loadKeys(privateKey, publicKey, null)
-                    }
+                val privateKey = keyManager.loadPrivateKey(accountId)
+                    ?: error("Missing SSH key for account $accountId")
+                val publicKey = keyManager.loadPublicKey(accountId)
+                val keyProvider = client.loadKeys(privateKey, publicKey, null)
                 client.authPublickey(username, keyProvider)
             }.getOrElse { authError ->
                 if (password.isNullOrBlank()) throw authError
